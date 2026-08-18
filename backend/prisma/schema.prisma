@@ -1,0 +1,231 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  FACULTY
+  ADMIN
+}
+
+enum ServiceRequestStatus {
+  RECEIVED
+  PROCESSING
+  WAITING_FOR_APPROVAL
+  APPROVED
+  REJECTED
+  COMPLETED
+  FAILED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  MORE_INFO_REQUIRED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum ResourceType {
+  LAB
+  CLASSROOM
+  SEMINAR_HALL
+  EQUIPMENT
+  OTHER
+}
+
+enum AuditEventType {
+  REQUEST_RECEIVED
+  AI_REASONING_STARTED
+  AI_REASONING_COMPLETED
+  POLICY_RETRIEVED
+  POLICY_CONFLICT_DETECTED
+  ACTION_PROPOSED
+  APPROVAL_REQUESTED
+  APPROVAL_GRANTED
+  APPROVAL_REJECTED
+  MORE_INFORMATION_REQUESTED
+  ACTION_EXECUTED
+  BOOKING_CREATED
+  REQUEST_COMPLETED
+  REQUEST_FAILED
+}
+
+model Institution {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departments     Department[]
+  users           User[]
+  resources       Resource[]
+  serviceRequests ServiceRequest[]
+  bookings        Booking[]
+  approvals       Approval[]
+  auditEvents     AuditEvent[]
+}
+
+model Department {
+  id            String @id @default(uuid())
+  institutionId String
+  name          String
+  code          String
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+  users       User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, code])
+  @@index([institutionId])
+}
+
+model User {
+  id            String  @id @default(uuid())
+  institutionId String
+  departmentId  String?
+
+  name  String
+  email String
+  role  UserRole
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+  department  Department? @relation(fields: [departmentId], references: [id])
+
+  serviceRequests ServiceRequest[]
+  bookings        Booking[]
+  approvals       Approval[]
+  auditEvents     AuditEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, email])
+  @@index([institutionId])
+  @@index([departmentId])
+}
+
+model Resource {
+  id            String @id @default(uuid())
+  institutionId String
+
+  name     String
+  type     ResourceType
+  location String?
+  capacity Int?
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+  bookings    Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, name])
+  @@index([institutionId])
+}
+
+model ServiceRequest {
+  id            String @id @default(uuid())
+  externalId    String @unique
+  institutionId String
+  userId        String
+
+  message String
+  intent  String?
+  status  ServiceRequestStatus @default(RECEIVED)
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+
+  booking     Booking?
+  approval    Approval?
+  auditEvents AuditEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Booking {
+  id            String @id @default(uuid())
+  institutionId String
+  resourceId    String
+  userId        String
+  requestId     String @unique
+
+  date      DateTime
+  startTime DateTime
+  endTime   DateTime
+  purpose   String?
+  status    BookingStatus @default(CONFIRMED)
+
+  institution Institution    @relation(fields: [institutionId], references: [id])
+  resource    Resource       @relation(fields: [resourceId], references: [id])
+  user        User           @relation(fields: [userId], references: [id])
+  request     ServiceRequest @relation(fields: [requestId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+  @@index([resourceId, date])
+  @@index([userId])
+}
+
+model Approval {
+  id            String  @id @default(uuid())
+  institutionId String
+  requestId     String  @unique
+  approverId    String?
+
+  status     ApprovalStatus @default(PENDING)
+  reason     String?
+  resolvedAt DateTime?
+
+  institution Institution    @relation(fields: [institutionId], references: [id])
+  request     ServiceRequest @relation(fields: [requestId], references: [id])
+  approver    User?          @relation(fields: [approverId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+  @@index([status])
+  @@index([approverId])
+}
+
+model AuditEvent {
+  id            String  @id @default(uuid())
+  institutionId String
+  requestId     String
+  actorId       String?
+
+  eventType AuditEventType
+  metadata  Json?
+
+  institution Institution    @relation(fields: [institutionId], references: [id])
+  request     ServiceRequest @relation(fields: [requestId], references: [id])
+  actor       User?          @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([institutionId])
+  @@index([requestId, createdAt])
+  @@index([actorId])
+}
