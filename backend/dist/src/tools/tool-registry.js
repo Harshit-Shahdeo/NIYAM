@@ -28,6 +28,7 @@ let ToolRegistry = class ToolRegistry {
             }
             this.register(instance);
         }
+        console.log('Registered institutional tools:', [...this.tools.keys()]);
     }
     register(tool) {
         if (this.tools.has(tool.name)) {

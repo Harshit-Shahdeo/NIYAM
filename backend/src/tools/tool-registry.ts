@@ -34,6 +34,10 @@ export class ToolRegistry implements OnModuleInit {
 
             this.register(instance);
         }
+        console.log(
+            'Registered institutional tools:',
+            [...this.tools.keys()],
+        );
     }
 
     register(tool: InstitutionalTool): void {

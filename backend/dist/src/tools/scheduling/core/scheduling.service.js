@@ -17,32 +17,65 @@ let SchedulingService = class SchedulingService {
     constructor(prisma) {
         this.prisma = prisma;
     }
-    async checkAvailability(resourceId, date, start, end) {
-        this.validateTimeRange(start, end);
-        const startTime = this.toDateTime(date, start);
-        const endTime = this.toDateTime(date, end);
-        const conflict = await this.prisma.booking.findFirst({
+    async findNextAvailableSlot(resourceId, requestedStart, requestedEnd) {
+        this.validateTimeRange(requestedStart, requestedEnd);
+        const bookings = await this.prisma.booking.findMany({
             where: {
                 resourceId,
-                date: this.toDateOnly(date),
                 status: {
                     not: 'CANCELLED',
                 },
-                startTime: {
-                    lt: endTime,
-                },
                 endTime: {
-                    gt: startTime,
+                    gte: requestedStart,
                 },
             },
+            orderBy: {
+                startTime: 'asc',
+            },
         });
-        return conflict === null;
+        const durationMs = requestedEnd.getTime() -
+            requestedStart.getTime();
+        let currentStart = requestedStart;
+        for (const booking of bookings) {
+            const currentEnd = new Date(currentStart.getTime() + durationMs);
+            if (currentEnd.getTime() <=
+                booking.startTime.getTime()) {
+                return {
+                    exactMatch: currentStart.getTime() ===
+                        requestedStart.getTime(),
+                    scheduledStart: currentStart,
+                    scheduledEnd: currentEnd,
+                };
+            }
+            if (currentStart.getTime() <
+                booking.endTime.getTime() &&
+                currentEnd.getTime() >
+                    booking.startTime.getTime()) {
+                currentStart = booking.endTime;
+            }
+        }
+        return {
+            exactMatch: currentStart.getTime() ===
+                requestedStart.getTime(),
+            scheduledStart: currentStart,
+            scheduledEnd: new Date(currentStart.getTime() + durationMs),
+        };
+    }
+    async checkAvailability(resourceId, requestedStart, requestedEnd) {
+        const slot = await this.findNextAvailableSlot(resourceId, requestedStart, requestedEnd);
+        return slot.exactMatch;
     }
     async createBooking(input) {
-        this.validateTimeRange(input.start, input.end);
-        const available = await this.checkAvailability(input.resourceId, input.date, input.start, input.end);
-        if (!available) {
-            throw new common_1.BadRequestException('Requested time slot is already booked');
+        this.validateTimeRange(input.startTime, input.endTime);
+        const slot = await this.findNextAvailableSlot(input.resourceId, input.startTime, input.endTime);
+        if (!slot.exactMatch) {
+            throw new common_1.BadRequestException({
+                message: 'Requested time slot is unavailable',
+                nextAvailable: {
+                    start: slot.scheduledStart,
+                    end: slot.scheduledEnd,
+                },
+            });
         }
         const user = await this.prisma.user.findUnique({
             where: {
@@ -66,7 +99,8 @@ let SchedulingService = class SchedulingService {
         if (!resource) {
             throw new common_1.BadRequestException('Resource not found');
         }
-        if (user.institutionId !== resource.institutionId) {
+        if (user.institutionId !==
+            resource.institutionId) {
             throw new common_1.BadRequestException('User and resource belong to different institutions');
         }
         const booking = await this.prisma.booking.create({
@@ -75,25 +109,16 @@ let SchedulingService = class SchedulingService {
                 resourceId: input.resourceId,
                 userId: input.userId,
                 requestId: input.requestId,
-                date: this.toDateOnly(input.date),
-                startTime: this.toDateTime(input.date, input.start),
-                endTime: this.toDateTime(input.date, input.end),
+                date: input.date,
+                startTime: input.startTime,
+                endTime: input.endTime,
                 purpose: input.purpose,
             },
         });
-        return {
-            id: booking.id,
-            requestId: booking.requestId,
-            resourceId: booking.resourceId,
-            userId: booking.userId,
-            date: input.date,
-            start: input.start,
-            end: input.end,
-            purpose: booking.purpose ?? undefined,
-        };
+        return booking;
     }
     async getBookings() {
-        const bookings = await this.prisma.booking.findMany({
+        return this.prisma.booking.findMany({
             where: {
                 status: {
                     not: 'CANCELLED',
@@ -103,31 +128,10 @@ let SchedulingService = class SchedulingService {
                 createdAt: 'desc',
             },
         });
-        return bookings.map((booking) => ({
-            id: booking.id,
-            requestId: booking.requestId,
-            resourceId: booking.resourceId,
-            userId: booking.userId,
-            date: this.formatDate(booking.date),
-            start: this.formatTime(booking.startTime),
-            end: this.formatTime(booking.endTime),
-            purpose: booking.purpose ?? undefined,
-        }));
     }
-    toDateOnly(date) {
-        return new Date(`${date}T00:00:00.000Z`);
-    }
-    toDateTime(date, time) {
-        return new Date(`${date}T${time}:00.000Z`);
-    }
-    formatDate(date) {
-        return date.toISOString().slice(0, 10);
-    }
-    formatTime(date) {
-        return date.toISOString().slice(11, 16);
-    }
-    validateTimeRange(start, end) {
-        if (start >= end) {
+    validateTimeRange(startTime, endTime) {
+        if (startTime.getTime() >=
+            endTime.getTime()) {
             throw new common_1.BadRequestException('Start time must be before end time');
         }
     }

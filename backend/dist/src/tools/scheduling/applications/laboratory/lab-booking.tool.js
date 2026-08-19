@@ -14,16 +14,19 @@ const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../../../database/prisma.service");
 const institutional_tools_1 = require("../../../institutional-tools");
 const tool_argument_validator_1 = require("../../../tool-argument-validator");
+const audit_service_1 = require("../../../../audit/audit.service");
 const scheduling_service_1 = require("../../core/scheduling.service");
 const lab_booking_args_dto_1 = require("./dto/lab-booking-args.dto");
 let LabBookingTool = class LabBookingTool extends institutional_tools_1.InstitutionalTool {
     prisma;
     schedulingService;
+    auditService;
     name = 'LabBookingTool';
-    constructor(prisma, schedulingService) {
+    constructor(prisma, schedulingService, auditService) {
         super();
         this.prisma = prisma;
         this.schedulingService = schedulingService;
+        this.auditService = auditService;
     }
     async execute(operation, arguments_, context) {
         if (operation !== 'book') {
@@ -43,21 +46,39 @@ let LabBookingTool = class LabBookingTool extends institutional_tools_1.Institut
         if (!resource) {
             throw new common_1.BadRequestException(`Laboratory not found: ${args.resource}`);
         }
-        return this.schedulingService.createBooking({
+        const date = new Date(`${args.date}T00:00:00.000Z`);
+        const startTime = new Date(`${args.date}T${args.start}:00.000Z`);
+        const endTime = new Date(`${args.date}T${args.end}:00.000Z`);
+        const booking = await this.schedulingService.createBooking({
             requestId: context.requestId,
             resourceId: resource.id,
             userId: context.userId,
-            date: args.date,
-            start: args.start,
-            end: args.end,
+            date,
+            startTime,
+            endTime,
             purpose: args.purpose,
         });
+        await this.auditService.record(context.institutionId, context.requestId, 'BOOKING_CREATED', {
+            actorId: context.userId,
+            metadata: {
+                bookingId: booking.id,
+                resourceId: booking.resourceId,
+                userId: booking.userId,
+                requestId: booking.requestId,
+                date: booking.date.toISOString(),
+                startTime: booking.startTime.toISOString(),
+                endTime: booking.endTime.toISOString(),
+                purpose: booking.purpose,
+            },
+        });
+        return booking;
     }
 };
 exports.LabBookingTool = LabBookingTool;
 exports.LabBookingTool = LabBookingTool = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
-        scheduling_service_1.SchedulingService])
+        scheduling_service_1.SchedulingService,
+        audit_service_1.AuditService])
 ], LabBookingTool);
 //# sourceMappingURL=lab-booking.tool.js.map

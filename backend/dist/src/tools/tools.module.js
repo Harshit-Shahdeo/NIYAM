@@ -9,6 +9,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ToolsModule = void 0;
 const common_1 = require("@nestjs/common");
 const core_1 = require("@nestjs/core");
+const database_module_1 = require("../database/database.module");
+const audit_module_1 = require("../audit/audit.module");
 const lab_booking_tool_1 = require("./scheduling/applications/laboratory/lab-booking.tool");
 const scheduling_service_1 = require("./scheduling/core/scheduling.service");
 const tool_registry_1 = require("./tool-registry");
@@ -18,7 +20,9 @@ exports.ToolsModule = ToolsModule;
 exports.ToolsModule = ToolsModule = __decorate([
     (0, common_1.Module)({
         imports: [
+            database_module_1.DatabaseModule,
             core_1.DiscoveryModule,
+            audit_module_1.AuditModule,
         ],
         providers: [
             tool_registry_1.ToolRegistry,

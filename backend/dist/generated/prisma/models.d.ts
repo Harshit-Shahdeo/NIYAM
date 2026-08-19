@@ -1,9 +1,0 @@
-export type * from './models/Institution.js';
-export type * from './models/Department.js';
-export type * from './models/User.js';
-export type * from './models/Resource.js';
-export type * from './models/ServiceRequest.js';
-export type * from './models/Booking.js';
-export type * from './models/Approval.js';
-export type * from './models/AuditEvent.js';
-export type * from './commonInputTypes.js';

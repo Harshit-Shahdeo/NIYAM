@@ -6,31 +6,24 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AgentModule = void 0;
+exports.AuditModule = void 0;
 const common_1 = require("@nestjs/common");
-const axios_1 = require("@nestjs/axios");
 const database_module_1 = require("../database/database.module");
-const tools_module_1 = require("../tools/tools.module");
-const agent_controller_1 = require("./agent.controller");
-const agent_service_1 = require("./agent.service");
-const audit_module_1 = require("../audit/audit.module");
-let AgentModule = class AgentModule {
+const audit_service_1 = require("./audit.service");
+let AuditModule = class AuditModule {
 };
-exports.AgentModule = AgentModule;
-exports.AgentModule = AgentModule = __decorate([
+exports.AuditModule = AuditModule;
+exports.AuditModule = AuditModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            axios_1.HttpModule,
             database_module_1.DatabaseModule,
-            tools_module_1.ToolsModule,
-            audit_module_1.AuditModule,
-        ],
-        controllers: [
-            agent_controller_1.AgentController,
         ],
         providers: [
-            agent_service_1.AgentService,
+            audit_service_1.AuditService,
+        ],
+        exports: [
+            audit_service_1.AuditService,
         ],
     })
-], AgentModule);
-//# sourceMappingURL=agent.module.js.map
+], AuditModule);
+//# sourceMappingURL=audit.module.js.map

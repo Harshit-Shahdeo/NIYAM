@@ -75,8 +75,8 @@ def reason(request: AgentReasonRequest):
             arguments={
                 "resource": "robotics-lab",
                 "date": "2026-08-19",
-                "start": "14:00",
-                "end": "16:00",
+                "start": "16:00",
+                "end": "18:00",
                 "purpose": "project",
             },
         ),
