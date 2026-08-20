@@ -228,3 +228,14 @@ model AuditEvent {
   @@index([requestId, createdAt])
   @@index([actorId])
 }
+
+model PolicyChunk {
+  id         String   @id @default(uuid())
+  documentId String
+  content    String
+  embedding  Unsupported("vector(384)")
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([documentId])
+}
