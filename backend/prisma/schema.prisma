@@ -58,6 +58,7 @@ enum AuditEventType {
   BOOKING_CREATED
   REQUEST_COMPLETED
   REQUEST_FAILED
+  ACTION_EXECUTION_FAILED
 }
 
 model Institution {

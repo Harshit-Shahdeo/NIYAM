@@ -2,6 +2,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
+from app.rag.chunker import chunk_policies
 
 
 def extract_text_from_pdf(
@@ -20,47 +21,7 @@ def extract_text_from_pdf(
     return "\n".join(pages)
 
 
-def chunk_text(
-    text: str,
-    chunk_size: int = 1200,
-    overlap: int = 200,
-) -> list[str]:
-    chunks = []
-
-    start = 0
-
-    while start < len(text):
-        end = min(
-            start + chunk_size,
-            len(text),
-        )
-
-        if end < len(text):
-            boundary = text.rfind(
-                "\n",
-                start,
-                end,
-            )
-
-            if boundary > start + (chunk_size // 2):
-                end = boundary
-
-        chunk = text[start:end].strip()
-
-        if chunk:
-            chunks.append(chunk)
-
-        # Stop after processing the final chunk
-        if end == len(text):
-            break
-
-        start = end - overlap
-
-    return chunks
-
-
 def ingest_policy_document(
-
     pdf_path: str,
     document_id: str,
 ) -> None:
@@ -73,29 +34,28 @@ def ingest_policy_document(
         pdf_path,
     )
 
-    print("Splitting document into chunks...")
+    print("Splitting document into policies...")
 
-    chunks = chunk_text(
-        text,
-    )
+    policies = chunk_policies(text)
 
-    print(f"Created {len(chunks)} chunks.")
+    print(f"Found {len(policies)} policies.")
 
-    for index, chunk in enumerate(chunks):
+    for index, policy in enumerate(policies, 1):
         print(
-            f"Processing chunk {index + 1}/{len(chunks)}..."
+            f"Processing policy {index}/{len(policies)}: "
+            f"{policy['policy_id']}"
         )
 
         embedding = generate_embedding(
-            chunk,
+            policy["content"],
         )
 
         store_policy_chunk(
             document_id=document_id,
-            content=chunk,
+            content=policy["content"],
             embedding=embedding,
             metadata={
-                "chunk_index": index,
+                "policy_id": policy["policy_id"],
                 "source": Path(pdf_path).name,
             },
         )
