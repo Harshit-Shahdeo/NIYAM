@@ -5,6 +5,7 @@ from app.schemas.response import Source
 
 
 class PolicyResolutionResult(BaseModel):
+    """Structured policy evidence and metadata extracted from RAG retrieval."""
     policy_ids: list[str] = Field(default_factory=list)
     requires_approval: bool = False
     authorities: list[str] = Field(default_factory=list)
@@ -17,7 +18,7 @@ class PolicyResolutionResult(BaseModel):
 
 
 class PolicyResolutionService:
-    """Interprets retrieved policy chunks and extracts constraints, authorities, and conflict flags."""
+    """Extracts structured policy evidence, context, and metadata from retrieved chunks."""
 
     def resolve_policies(
         self,
@@ -25,8 +26,7 @@ class PolicyResolutionService:
         user: AgentUserDto,
         message: str,
     ) -> PolicyResolutionResult:
-        msg_lower = message.lower()
-
+        # Handle empty retrieval / insufficient evidence explicitly (Refactoring Guide Section 5)
         if not retrieved_chunks:
             return PolicyResolutionResult(
                 policy_ids=[],
@@ -42,10 +42,7 @@ class PolicyResolutionService:
         policy_ids: list[str] = []
         sources: list[Source] = []
         context_lines: list[str] = []
-
-        requires_approval = False
         authorities: list[str] = []
-        policy_conflict_detected = False
 
         for chunk in retrieved_chunks:
             meta = chunk.get("metadata") or {}
@@ -70,74 +67,21 @@ class PolicyResolutionService:
             context_lines.append(f"[{pol_id} - {section}]: {content}")
 
             content_lower = content.lower()
-            if "approval" in content_lower or "permission" in content_lower or "authorization" in content_lower:
-                requires_approval = True
-                if "faculty" in content_lower and "Faculty" not in authorities:
-                    authorities.append("Faculty")
-                if "admin" in content_lower and "Admin" not in authorities:
-                    authorities.append("Admin")
-                if "supervisor" in content_lower and "Supervisor" not in authorities:
-                    authorities.append("Supervisor")
-
-        # Intent detection
-        is_informational = any(
-            phrase in msg_lower
-            for phrase in [
-                "what is the maximum",
-                "what is the limit",
-                "how long",
-                "can i use a lab for more than",
-                "policy on",
-                "rules for",
-                "tell me about",
-            ]
-        )
-
-        suggested_intent = "POLICY_INQUIRY" if is_informational else "LABORATORY_BOOKING"
-
-        # Check for duration constraint (>2 hours)
-        is_extended_duration = any(
-            term in msg_lower
-            for term in ["3 hour", "3 hours", "three hours", "4 hours", "four hours", "more than two", "2 to 5"]
-        )
-        if is_extended_duration:
-            requires_approval = True
-            if "Faculty" not in authorities:
+            if "faculty" in content_lower and "Faculty" not in authorities:
                 authorities.append("Faculty")
-
-        # Check for after-hours (>8 PM / 10 PM)
-        is_after_hours = any(
-            term in msg_lower
-            for term in ["10 pm", "22:00", "after hours", "night", "late night", "23:00"]
-        )
-        if is_after_hours:
-            requires_approval = True
-            if "Admin" not in authorities:
+            if "admin" in content_lower and "Admin" not in authorities:
                 authorities.append("Admin")
-
-        # Check for exam period constraints
-        is_exam_period = "exam" in msg_lower or "exam week" in msg_lower or "examination" in msg_lower
-        if is_exam_period:
-            requires_approval = True
-            policy_conflict_detected = True
-            if "Faculty" not in authorities:
-                authorities.append("Faculty")
-
-        # Flag conflict when multiple distinct operational constraints interact
-        if (is_after_hours and is_exam_period) or (is_extended_duration and is_after_hours):
-            policy_conflict_detected = True
-
-        if requires_approval and not authorities:
-            authorities = ["Faculty", "Admin"]
+            if "supervisor" in content_lower and "Supervisor" not in authorities:
+                authorities.append("Supervisor")
 
         return PolicyResolutionResult(
             policy_ids=policy_ids,
-            requires_approval=requires_approval,
-            authorities=authorities,
-            priorities=["HIGH"] if policy_conflict_detected else ["NORMAL"],
-            policy_conflict_detected=policy_conflict_detected,
+            requires_approval=False,
+            authorities=authorities or ["Faculty"],
+            priorities=["NORMAL"],
+            policy_conflict_detected=False,
             policy_context_text="\n".join(context_lines),
             sources=sources,
-            has_sufficient_evidence=len(retrieved_chunks) > 0,
-            suggested_intent=suggested_intent,
+            has_sufficient_evidence=True,
+            suggested_intent="LABORATORY_BOOKING",
         )

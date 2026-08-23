@@ -53,10 +53,17 @@ export class AgentService {
     }
 
     /*
-     * 2. Create the institutional service request.
+     * 2. Create or update the institutional service request (Idempotent).
      */
-    const serviceRequest = await this.prisma.serviceRequest.create({
-      data: {
+    const serviceRequest = await this.prisma.serviceRequest.upsert({
+      where: {
+        externalId: request.request_id,
+      },
+      update: {
+        message: request.message,
+        status: 'PROCESSING',
+      },
+      create: {
         externalId: request.request_id,
         institutionId: user.institutionId,
         userId: user.id,
@@ -91,11 +98,13 @@ export class AgentService {
     );
 
     let response;
+    const aiServiceUrl =
+      process.env.AI_SERVICE_URL || 'http://localhost:8000/agent/reason';
 
     try {
       response = await firstValueFrom(
         this.httpService.post<AgentReasonResponseDto>(
-          'http://localhost:8000/agent/reason',
+          aiServiceUrl,
           request,
         ),
       );
@@ -229,8 +238,15 @@ export class AgentService {
         );
       }
 
-      await this.prisma.approval.create({
-        data: {
+      await this.prisma.approval.upsert({
+        where: {
+          requestId: serviceRequest.id,
+        },
+        update: {
+          status: 'PENDING',
+          reason: aiResponse.reason,
+        },
+        create: {
           institutionId: user.institutionId,
           requestId: serviceRequest.id,
           status: 'PENDING',
@@ -262,32 +278,27 @@ export class AgentService {
     }
 
     /*
-     * 10. ALLOW → we must have an action to execute.
+     * 10. ALLOW - Actionable vs Informational.
      */
     if (!aiResponse.proposed_action) {
+      // If there's no action, this is an informational query (e.g., POLICY_INQUIRY).
+      // Mark as completed and return the AI's reason to the user.
       await this.prisma.serviceRequest.update({
         where: {
           id: serviceRequest.id,
         },
         data: {
-          status: 'FAILED',
+          status: 'COMPLETED',
         },
       });
 
       await this.auditService.record(
         user.institutionId,
         serviceRequest.id,
-        'REQUEST_FAILED',
-        {
-          metadata: {
-            reason: 'AI allowed the request but did not provide an action',
-          },
-        },
+        'REQUEST_COMPLETED',
       );
 
-      throw new InternalServerErrorException(
-        'AI allowed the request but did not provide an action',
-      );
+      return aiResponse;
     }
 
     /*

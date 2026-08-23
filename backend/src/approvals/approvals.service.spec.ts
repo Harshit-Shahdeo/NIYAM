@@ -16,6 +16,7 @@ describe('ApprovalsService', () => {
       findMany: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     serviceRequest: {
       update: jest.fn(),
@@ -82,6 +83,7 @@ describe('ApprovalsService', () => {
         id: 'app-1',
         status: 'APPROVED',
       });
+      mockPrisma.approval.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(
         service.review('app-1', { decision: 'APPROVED' }),
@@ -98,10 +100,7 @@ describe('ApprovalsService', () => {
       };
 
       mockPrisma.approval.findUnique.mockResolvedValue(mockApproval);
-      mockPrisma.approval.update.mockResolvedValue({
-        ...mockApproval,
-        status: 'APPROVED',
-      });
+      mockPrisma.approval.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.auditEvent.findFirst.mockResolvedValue({
         eventType: 'ACTION_PROPOSED',
         metadata: {
@@ -119,7 +118,7 @@ describe('ApprovalsService', () => {
       });
 
       expect(result.status).toBe('APPROVED');
-      expect(prisma.approval.update).toHaveBeenCalled();
+      expect(prisma.approval.updateMany).toHaveBeenCalled();
       expect(auditService.logEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'APPROVAL_GRANTED',
@@ -144,10 +143,7 @@ describe('ApprovalsService', () => {
       };
 
       mockPrisma.approval.findUnique.mockResolvedValue(mockApproval);
-      mockPrisma.approval.update.mockResolvedValue({
-        ...mockApproval,
-        status: 'REJECTED',
-      });
+      mockPrisma.approval.updateMany.mockResolvedValue({ count: 1 });
 
       const result = await service.review('app-2', {
         decision: 'REJECTED',

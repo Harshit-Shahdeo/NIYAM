@@ -127,8 +127,19 @@ export class SchedulingService {
       );
     }
 
-    const booking = await this.prisma.booking.create({
-      data: {
+    const booking = await this.prisma.booking.upsert({
+      where: {
+        requestId: input.requestId,
+      },
+      update: {
+        resourceId: input.resourceId,
+        userId: input.userId,
+        date: input.date,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        purpose: input.purpose,
+      },
+      create: {
         institutionId: user.institutionId,
         resourceId: input.resourceId,
         userId: input.userId,
