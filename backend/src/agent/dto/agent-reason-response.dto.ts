@@ -28,11 +28,7 @@ export class AgentReasonResponseDto {
   @IsBoolean()
   requires_approval!: boolean;
 
-  @IsIn([
-    'ALLOW',
-    'REQUIRE_HUMAN_APPROVAL',
-    'REJECT',
-  ])
+  @IsIn(['ALLOW', 'REQUIRE_HUMAN_APPROVAL', 'REJECT'])
   decision!: 'ALLOW' | 'REQUIRE_HUMAN_APPROVAL' | 'REJECT';
 
   @IsOptional()

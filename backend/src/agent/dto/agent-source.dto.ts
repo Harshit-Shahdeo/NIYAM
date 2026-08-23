@@ -6,6 +6,10 @@ export class AgentSourceDto {
 
   @IsOptional()
   @IsString()
+  policy_id?: string;
+
+  @IsOptional()
+  @IsString()
   section?: string;
 
   @IsOptional()

@@ -27,7 +27,7 @@ export class AgentService {
     private readonly prisma: PrismaService,
     private readonly toolRegistry: ToolRegistry,
     private readonly auditService: AuditService,
-  ) { }
+  ) {}
 
   async reason(
     request: AgentReasonRequestDto,
@@ -49,24 +49,21 @@ export class AgentService {
     });
 
     if (!user) {
-      throw new NotFoundException(
-        'User not found',
-      );
+      throw new NotFoundException('User not found');
     }
 
     /*
      * 2. Create the institutional service request.
      */
-    const serviceRequest =
-      await this.prisma.serviceRequest.create({
-        data: {
-          externalId: request.request_id,
-          institutionId: user.institutionId,
-          userId: user.id,
-          message: request.message,
-          status: 'PROCESSING',
-        },
-      });
+    const serviceRequest = await this.prisma.serviceRequest.create({
+      data: {
+        externalId: request.request_id,
+        institutionId: user.institutionId,
+        userId: user.id,
+        message: request.message,
+        status: 'PROCESSING',
+      },
+    });
 
     /*
      * 3. Record that the institution received
@@ -103,10 +100,7 @@ export class AgentService {
         ),
       );
     } catch (error) {
-      console.error(
-        'FastAPI request failed:',
-        error,
-      );
+      console.error('FastAPI request failed:', error);
 
       await this.prisma.serviceRequest.update({
         where: {
@@ -128,32 +122,21 @@ export class AgentService {
         },
       );
 
-      throw new ServiceUnavailableException(
-        'AI reasoning service unavailable',
-      );
+      throw new ServiceUnavailableException('AI reasoning service unavailable');
     }
 
     /*
      * 5. Validate the AI response.
      */
-    const aiResponse = plainToInstance(
-      AgentReasonResponseDto,
-      response.data,
-    );
+    const aiResponse = plainToInstance(AgentReasonResponseDto, response.data);
 
-    const errors = await validate(
-      aiResponse,
-      {
-        whitelist: true,
-        forbidNonWhitelisted: true,
-      },
-    );
+    const errors = await validate(aiResponse, {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
 
     if (errors.length > 0) {
-      console.error(
-        'Invalid AI response:',
-        errors,
-      );
+      console.error('Invalid AI response:', errors);
 
       await this.prisma.serviceRequest.update({
         where: {
@@ -191,12 +174,9 @@ export class AgentService {
         metadata: {
           intent: aiResponse.intent,
           decision: aiResponse.decision,
-          confidenceScore:
-            aiResponse.confidence_score,
-          uncertaintyDetected:
-            aiResponse.uncertainty_detected,
-          policyConflictDetected:
-            aiResponse.policy_conflict_detected,
+          confidenceScore: aiResponse.confidence_score,
+          uncertaintyDetected: aiResponse.uncertainty_detected,
+          policyConflictDetected: aiResponse.policy_conflict_detected,
         },
       },
     );
@@ -232,10 +212,7 @@ export class AgentService {
     /*
      * 9. Handle human approval.
      */
-    if (
-      aiResponse.decision ===
-      'REQUIRE_HUMAN_APPROVAL'
-    ) {
+    if (aiResponse.decision === 'REQUIRE_HUMAN_APPROVAL') {
       if (aiResponse.proposed_action) {
         await this.auditService.record(
           user.institutionId,
@@ -245,8 +222,8 @@ export class AgentService {
             metadata: {
               tool: aiResponse.proposed_action.tool,
               operation: aiResponse.proposed_action.operation,
-              arguments:
-                aiResponse.proposed_action.arguments as Prisma.InputJsonValue,
+              arguments: aiResponse.proposed_action
+                .arguments as Prisma.InputJsonValue,
             },
           },
         );
@@ -303,8 +280,7 @@ export class AgentService {
         'REQUEST_FAILED',
         {
           metadata: {
-            reason:
-              'AI allowed the request but did not provide an action',
+            reason: 'AI allowed the request but did not provide an action',
           },
         },
       );
@@ -323,12 +299,10 @@ export class AgentService {
       'ACTION_PROPOSED',
       {
         metadata: {
-          tool:
-            aiResponse.proposed_action.tool,
-          operation:
-            aiResponse.proposed_action.operation,
-          arguments:
-            aiResponse.proposed_action.arguments as Prisma.InputJsonValue,
+          tool: aiResponse.proposed_action.tool,
+          operation: aiResponse.proposed_action.operation,
+          arguments: aiResponse.proposed_action
+            .arguments as Prisma.InputJsonValue,
         },
       },
     );
@@ -355,10 +329,7 @@ export class AgentService {
         context,
       );
     } catch (error) {
-      console.error(
-        'Institutional tool execution failed:',
-        error,
-      );
+      console.error('Institutional tool execution failed:', error);
 
       await this.prisma.serviceRequest.update({
         where: {
@@ -375,8 +346,7 @@ export class AgentService {
         'REQUEST_FAILED',
         {
           metadata: {
-            reason:
-              'Institutional tool execution failed',
+            reason: 'Institutional tool execution failed',
           },
         },
       );
@@ -393,10 +363,8 @@ export class AgentService {
       'ACTION_EXECUTED',
       {
         metadata: {
-          tool:
-            aiResponse.proposed_action.tool,
-          operation:
-            aiResponse.proposed_action.operation,
+          tool: aiResponse.proposed_action.tool,
+          operation: aiResponse.proposed_action.operation,
         },
       },
     );

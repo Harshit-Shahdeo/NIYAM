@@ -1,8 +1,4 @@
-import {
-  IsArray,
-  IsString,
-  ValidateNested,
-} from 'class-validator';
+import { IsArray, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 import { AgentUserDto } from './agent-user.dto';

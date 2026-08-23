@@ -8,19 +8,10 @@ import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { AuditModule } from '../audit/audit.module';
 @Module({
-  imports: [
-    HttpModule,
-    DatabaseModule,
-    ToolsModule,
-    AuditModule,
-  ],
+  imports: [HttpModule, DatabaseModule, ToolsModule, AuditModule],
 
-  controllers: [
-    AgentController,
-  ],
+  controllers: [AgentController],
 
-  providers: [
-    AgentService,
-  ],
+  providers: [AgentService],
 })
-export class AgentModule { }
+export class AgentModule {}

@@ -1,87 +1,28 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.agent import router as agent_router
 
 app = FastAPI(
-    title="NIYAM AI Brain",
-    version="0.1.0",
+    title="NIYAM AI Reasoning Brain",
+    description="Policy-grounded reasoning service for autonomous institutional actions",
+    version="0.2.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class AgentReasonRequest(BaseModel):
-    request_id: str
-    message: str
-    user: dict
-    conversation: list[dict] = []
-
-
-class ProposedAction(BaseModel):
-    tool: str
-    operation: str
-    arguments: dict
+app.include_router(agent_router)
 
 
-class Source(BaseModel):
-    document: str
-    section: str | None = None
-    chunk_id: str | None = None
-
-
-class AgentReasonResponse(BaseModel):
-    intent: str
-    confidence_score: float
-
-    uncertainty_detected: bool
-    policy_conflict_detected: bool
-    requires_approval: bool
-
-    decision: str
-
-    proposed_action: ProposedAction | None
-
-    sources: list[Source]
-
-    reason: str
-
-
-@app.get("/health")
-def health():
+@app.get("/health", tags=["Health"])
+def health_check():
     return {
-        "service": "niyam-ai",
         "status": "ok",
+        "service": "niyam-ai",
+        "version": "0.2.0",
     }
-
-
-@app.post("/agent/reason", response_model=AgentReasonResponse)
-def reason(request: AgentReasonRequest):
-
-    # Temporary mock AI.
-    # This will later be replaced by:
-    # normalization → RAG → uncertainty detection → LLM reasoning.
-
-    return AgentReasonResponse(
-        intent="LABORATORY_BOOKING",
-        confidence_score=0.95,
-
-        uncertainty_detected=False,
-        policy_conflict_detected=False,
-        requires_approval=False,
-
-        decision="ALLOW",
-
-        proposed_action=ProposedAction(
-            tool="LabBookingTool",
-            operation="book",
-            arguments={
-                "resource": "robotics-lab",
-                "date": "2026-08-19",
-                "start": "16:00",
-                "end": "18:00",
-                "purpose": "project",
-            },
-        ),
-
-        sources=[],
-
-        reason="Mock AI decision.",
-    )

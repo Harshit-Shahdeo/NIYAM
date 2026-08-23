@@ -9,21 +9,10 @@ import { SchedulingService } from './scheduling/core/scheduling.service';
 import { ToolRegistry } from './tool-registry';
 
 @Module({
-    imports: [
-        DatabaseModule,
-        DiscoveryModule,
-        AuditModule,
-    ],
+  imports: [DatabaseModule, DiscoveryModule, AuditModule],
 
-    providers: [
-        ToolRegistry,
-        SchedulingService,
-        LabBookingTool,
-    ],
+  providers: [ToolRegistry, SchedulingService, LabBookingTool],
 
-    exports: [
-        ToolRegistry,
-        SchedulingService,
-    ],
+  exports: [ToolRegistry, SchedulingService],
 })
-export class ToolsModule { }
+export class ToolsModule {}
