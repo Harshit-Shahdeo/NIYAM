@@ -62,7 +62,7 @@ export class LabBookingTool extends InstitutionalTool {
       date,
       startTime,
       endTime,
-      purpose: args.purpose,
+      purpose: args.purpose ?? null,
     });
 
     await this.auditService.record(

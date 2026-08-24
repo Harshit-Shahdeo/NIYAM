@@ -1,4 +1,4 @@
-import { IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 export class LabBookingArgsDto {
   @IsString()
@@ -13,6 +13,7 @@ export class LabBookingArgsDto {
   @IsString()
   end!: string;
 
+  @IsOptional()
   @IsString()
-  purpose!: string;
+  purpose?: string;
 }

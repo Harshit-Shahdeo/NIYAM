@@ -4,6 +4,8 @@ node_modules/
 # Environment variables
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # Prisma generated files
 /generated/prisma/
@@ -31,4 +33,3 @@ backend/dist/
 # OS files
 .DS_Store
 
-ai/data

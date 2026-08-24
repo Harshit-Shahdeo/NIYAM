@@ -1,132 +1,85 @@
-from typing import Any
 from app.schemas.request import AgentReasonRequest
-from app.schemas.response import AgentReasonResponse, ProposedAction, Source
+from app.schemas.response import AgentReasonResponse
+
 from app.rag.retriever import retrieve_relevant_policies
-from app.services.policy_resolution_service import PolicyResolutionService
+from app.rag.context import build_policy_context
+
+from app.policy.engine import analyze_policies
+
 from app.services.llm_service import LLMService
+from app.services.resource_service import ResourceService
 
 
 class DecisionService:
-    """Master coordinator executing: RAG retrieval -> Policy Resolution -> LLM Reasoning -> Confidence Hierarchy -> Output Validation."""
+    """
+    Coordinates the NIYAM reasoning pipeline.
+
+    Flow:
+        Request
+        -> Retrieve relevant policy chunks
+        -> Parse policies
+        -> Build policy context
+        -> LLM reasoning
+        -> Structured response
+    """
 
     def __init__(self) -> None:
-        self.policy_resolution_service = PolicyResolutionService()
         self.llm_service = LLMService()
+        self.resource_service = ResourceService()
 
-    def process_reasoning_request(self, request: AgentReasonRequest) -> AgentReasonResponse:
-        # Step 1: Query existing RAG retriever
-        query_text = request.message
-        if request.conversation:
-            last_msgs = " ".join([m.content for m in request.conversation[-2:]])
-            query_text = f"{last_msgs} {request.message}"
-
-        retrieved_chunks = retrieve_relevant_policies(query_text, limit=5)
-
-        # Step 2: Policy Resolution
-        resolution = self.policy_resolution_service.resolve_policies(
-            retrieved_chunks=retrieved_chunks,
-            user=request.user,
-            message=request.message,
-        )
-
-        # Step 3: Format conversation context
-        conversation_context = ""
-        if request.conversation:
-            conversation_context = "\n".join(
-                [f"{msg.role.upper()}: {msg.content}" for msg in request.conversation]
-            )
-
-        # Step 4: LLM Reasoning
-        raw_decision = self.llm_service.reason(
-            request=request,
-            resolution=resolution,
-            conversation_context=conversation_context,
-        )
-
-        # Step 5: Enforce Validation and Confidence Hierarchy
-        return self._build_validated_response(raw_decision, resolution, request)
-
-    def _build_validated_response(
+    def process_reasoning_request(
         self,
-        raw_decision: dict[str, Any],
-        resolution: Any,
         request: AgentReasonRequest,
     ) -> AgentReasonResponse:
-        intent = raw_decision.get("intent", resolution.suggested_intent)
-        confidence = float(raw_decision.get("confidence_score", 0.85))
-        uncertainty = bool(raw_decision.get("uncertainty_detected", False))
-        policy_conflict = bool(raw_decision.get("policy_conflict_detected", resolution.policy_conflict_detected))
-        requires_approval = bool(raw_decision.get("requires_approval", resolution.requires_approval))
-        decision = raw_decision.get("decision", "ALLOW")
-        reason = raw_decision.get("reason", "Request evaluated against institutional policy guidelines.")
 
-        # Parse proposed_action
-        raw_action = raw_decision.get("proposed_action")
-        proposed_action: ProposedAction | None = None
+        # 1. Build the retrieval query.
+        query = request.message
 
-        if isinstance(raw_action, dict) and raw_action.get("tool") and raw_action.get("operation"):
-            tool = raw_action["tool"]
-            operation = raw_action["operation"]
-            arguments = raw_action.get("arguments", {})
+        if request.conversation:
+            recent_messages = " ".join(
+                message.content
+                for message in request.conversation[-4:]
+            )
 
-            # Required parameters check for LabBookingTool
-            if tool == "LabBookingTool" and operation == "book":
-                has_all_params = all(
-                    k in arguments and arguments[k]
-                    for k in ["resource", "date", "start", "end"]
-                )
-                if has_all_params:
-                    proposed_action = ProposedAction(
-                        tool=tool,
-                        operation=operation,
-                        arguments=arguments,
-                    )
-                else:
-                    uncertainty = True
-                    proposed_action = None
+            query = f"{recent_messages} {request.message}"
 
-        # Safety Rules
-        # Rule A: If informational intent, force proposed_action = None
-        if intent in ["POLICY_INQUIRY", "GENERAL_QUERY", "UNKNOWN"]:
-            proposed_action = None
+        # 2. Retrieve relevant policy chunks.
+        retrieved_chunks = retrieve_relevant_policies(
+            query=query,
+            limit=10,
+        )
 
-        # Rule B: If weak evidence or vague query, force proposed_action = None
-        if uncertainty or (not resolution.has_sufficient_evidence and not request.conversation and len(request.message.split()) < 4):
-            confidence = min(confidence, 0.50)
-            uncertainty = True
-            if decision == "ALLOW":
-                decision = "REQUIRE_HUMAN_APPROVAL"
-            proposed_action = None
+        # 3. Parse retrieved policies into structured data.
+        policies = analyze_policies(retrieved_chunks)
 
-        # Rule C: If requires approval is true, align decision
-        if requires_approval and decision == "ALLOW":
-            decision = "REQUIRE_HUMAN_APPROVAL"
+        # 4. Build readable policy context.
+        policy_context = build_policy_context(
+            retrieved_chunks,
+        )
 
-        # Format sources
-        sources: list[Source] = []
-        raw_sources = raw_decision.get("sources")
-        if isinstance(raw_sources, list) and raw_sources:
-            for s in raw_sources:
-                if isinstance(s, dict):
-                    sources.append(
-                        Source(
-                            document=s.get("document", "NIYAM Policy Handbook"),
-                            policy_id=s.get("policy_id"),
-                            section=s.get("section"),
-                            chunk_id=str(s.get("chunk_id")) if s.get("chunk_id") else None,
-                        )
-                    )
-        elif resolution.sources:
-            sources = resolution.sources
+        # 5. Build conversation context.
+        conversation_context = ""
 
+        if request.conversation:
+            conversation_context = "\n".join(
+                f"{message.role.upper()}: {message.content}"
+                for message in request.conversation
+            )
+
+        # 5.1. Get available resources from backend.
+        resources = self.resource_service.get_available_resources()
+
+        # 6. Let the LLM reason over the request and policies.
+        raw_response = self.llm_service.reason(
+            request=request,
+            policies=policies,
+            policy_context=policy_context,
+            conversation_context=conversation_context,
+            retrieved_chunks=retrieved_chunks,
+            resources=resources,
+        )
+
+        # 7. Convert the LLM output into the API response schema.
         return AgentReasonResponse(
-            intent=intent,
-            confidence_score=round(confidence, 2),
-            uncertainty_detected=uncertainty,
-            policy_conflict_detected=policy_conflict,
-            requires_approval=requires_approval,
-            decision=decision,
-            proposed_action=proposed_action,
-            sources=sources,
-            reason=reason,
+            **raw_response,
         )
