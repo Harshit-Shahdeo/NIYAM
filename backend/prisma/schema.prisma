@@ -70,6 +70,7 @@ model Institution {
 
   departments     Department[]
   users           User[]
+  studentProfiles StudentProfile[]
   resources       Resource[]
   serviceRequests ServiceRequest[]
   bookings        Booking[]
@@ -83,8 +84,9 @@ model Department {
   name          String
   code          String
 
-  institution Institution @relation(fields: [institutionId], references: [id])
-  users       User[]
+  institution     Institution      @relation(fields: [institutionId], references: [id])
+  users           User[]
+  studentProfiles StudentProfile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -98,12 +100,16 @@ model User {
   institutionId String
   departmentId  String?
 
-  name  String
-  email String
-  role  UserRole
+  name         String
+  email        String
+  role         UserRole
+  passwordHash String
+  isActive     Boolean  @default(true)
 
   institution Institution @relation(fields: [institutionId], references: [id])
   department  Department? @relation(fields: [departmentId], references: [id])
+
+  studentProfile StudentProfile?
 
   serviceRequests ServiceRequest[]
   bookings        Booking[]
@@ -114,6 +120,33 @@ model User {
   updatedAt DateTime @updatedAt
 
   @@unique([institutionId, email])
+  @@index([institutionId])
+  @@index([departmentId])
+}
+
+model StudentProfile {
+  id String @id @default(uuid())
+
+  institutionId String
+  userId        String  @unique
+  departmentId  String?
+
+  enrollmentNumber String
+
+  program  String?
+  semester Int?
+
+  cgpa                 Decimal? @db.Decimal(4, 2)
+  attendancePercentage Decimal? @db.Decimal(5, 2)
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department  Department? @relation(fields: [departmentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, enrollmentNumber])
   @@index([institutionId])
   @@index([departmentId])
 }
@@ -231,12 +264,12 @@ model AuditEvent {
 }
 
 model PolicyChunk {
-  id         String   @id @default(uuid())
+  id         String                     @id @default(uuid())
   documentId String
   content    String
   embedding  Unsupported("vector(384)")
   metadata   Json?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime                   @default(now())
 
   @@index([documentId])
 }

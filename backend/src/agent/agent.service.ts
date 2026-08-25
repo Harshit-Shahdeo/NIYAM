@@ -13,6 +13,7 @@ import { validate } from 'class-validator';
 
 import { PrismaService } from '../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { StudentsService } from '../students/students.service';
 
 import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutionContext } from '../tools/tool-execution-context';
@@ -27,24 +28,31 @@ export class AgentService {
     private readonly prisma: PrismaService,
     private readonly toolRegistry: ToolRegistry,
     private readonly auditService: AuditService,
-  ) {}
+    private readonly studentsService: StudentsService,
+  ) { }
 
   async reason(
     request: AgentReasonRequestDto,
+    authenticatedUser: {
+      userId: string;
+      institutionId: string;
+      role: string;
+    },
   ): Promise<AgentReasonResponseDto> {
     /*
-     * 1. Resolve the user from our database.
+     * 1. Resolve the authenticated user.
      *
-     * The client tells us who they claim to be,
-     * but institution context comes from our database.
+     * The JWT determines who is actually making the request.
+     * We do not trust identity information from the request body.
      */
-    const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.user.findFirst({
       where: {
-        id: request.user.id,
+        id: authenticatedUser.userId,
+        institutionId: authenticatedUser.institutionId,
+        isActive: true,
       },
-      select: {
-        id: true,
-        institutionId: true,
+      include: {
+        department: true,
       },
     });
 
@@ -53,28 +61,74 @@ export class AgentService {
     }
 
     /*
-     * 2. Create or update the institutional service request (Idempotent).
+     * 2. Build trusted context.
+     *
+     * Student context is fetched from our database only when
+     * the authenticated user is a STUDENT.
+     *
+     * FACULTY and ADMIN requests do not unnecessarily receive
+     * student-specific context.
      */
-    const serviceRequest = await this.prisma.serviceRequest.upsert({
-      where: {
-        externalId: request.request_id,
-      },
-      update: {
-        message: request.message,
-        status: 'PROCESSING',
-      },
-      create: {
-        externalId: request.request_id,
-        institutionId: user.institutionId,
-        userId: user.id,
-        message: request.message,
-        status: 'PROCESSING',
-      },
-    });
+    let studentContext: Record<string, unknown> | undefined;
+
+    if (user.role === 'STUDENT') {
+      const studentProfile =
+        await this.studentsService.getMyStudentProfile(
+          user.id,
+          user.institutionId,
+        );
+
+      studentContext =
+        studentProfile as Record<string, unknown>;
+    }
 
     /*
-     * 3. Record that the institution received
-     *    the request.
+     * 3. Build the trusted request sent to FastAPI.
+     *
+     * Identity and institutional context come from NestJS/database,
+     * not from the client.
+     */
+    const aiRequest = {
+      request_id: request.request_id,
+      message: request.message,
+      conversation: request.conversation,
+      user: {
+        id: user.id,
+        role: user.role,
+        department: user.department?.code,
+      },
+      ...(studentContext
+        ? {
+          student_context: studentContext,
+        }
+        : {}),
+    };
+
+    /*
+     * 4. Create or update the institutional service request.
+     *
+     * This makes the endpoint idempotent using request_id.
+     */
+    const serviceRequest =
+      await this.prisma.serviceRequest.upsert({
+        where: {
+          externalId: request.request_id,
+        },
+        update: {
+          message: request.message,
+          status: 'PROCESSING',
+        },
+        create: {
+          externalId: request.request_id,
+          institutionId: user.institutionId,
+          userId: user.id,
+          message: request.message,
+          status: 'PROCESSING',
+        },
+      });
+
+    /*
+     * 5. Record request receipt.
      */
     await this.auditService.record(
       user.institutionId,
@@ -89,7 +143,7 @@ export class AgentService {
     );
 
     /*
-     * 4. Start AI reasoning.
+     * 6. Record AI reasoning start.
      */
     await this.auditService.record(
       user.institutionId,
@@ -98,14 +152,19 @@ export class AgentService {
     );
 
     let response;
-    const aiServiceUrl =
-      process.env.AI_SERVICE_URL || 'http://localhost:8000/agent/reason';
 
+    const aiServiceUrl =
+      process.env.AI_SERVICE_URL ||
+      'http://localhost:8000/agent/reason';
+
+    /*
+     * 7. Send trusted request to FastAPI.
+     */
     try {
       response = await firstValueFrom(
         this.httpService.post<AgentReasonResponseDto>(
           aiServiceUrl,
-          request,
+          aiRequest,
         ),
       );
     } catch (error) {
@@ -131,13 +190,21 @@ export class AgentService {
         },
       );
 
-      throw new ServiceUnavailableException('AI reasoning service unavailable');
+      throw new ServiceUnavailableException(
+        'AI reasoning service unavailable',
+      );
     }
 
     /*
-     * 5. Validate the AI response.
+     * 8. Validate the AI response.
+     *
+     * FastAPI is treated as a separate service. NestJS validates
+     * its response before trusting or executing anything from it.
      */
-    const aiResponse = plainToInstance(AgentReasonResponseDto, response.data);
+    const aiResponse = plainToInstance(
+      AgentReasonResponseDto,
+      response.data,
+    );
 
     const errors = await validate(aiResponse, {
       whitelist: true,
@@ -173,7 +240,7 @@ export class AgentService {
     }
 
     /*
-     * 6. Record successful AI reasoning.
+     * 9. Record successful AI reasoning.
      */
     await this.auditService.record(
       user.institutionId,
@@ -184,14 +251,16 @@ export class AgentService {
           intent: aiResponse.intent,
           decision: aiResponse.decision,
           confidenceScore: aiResponse.confidence_score,
-          uncertaintyDetected: aiResponse.uncertainty_detected,
-          policyConflictDetected: aiResponse.policy_conflict_detected,
+          uncertaintyDetected:
+            aiResponse.uncertainty_detected,
+          policyConflictDetected:
+            aiResponse.policy_conflict_detected,
         },
       },
     );
 
     /*
-     * 7. Persist the AI's high-level reasoning result.
+     * 10. Persist the AI's high-level reasoning result.
      */
     await this.prisma.serviceRequest.update({
       where: {
@@ -203,7 +272,7 @@ export class AgentService {
     });
 
     /*
-     * 8. Handle rejection.
+     * 11. Handle rejection.
      */
     if (aiResponse.decision === 'REJECT') {
       await this.prisma.serviceRequest.update({
@@ -219,9 +288,12 @@ export class AgentService {
     }
 
     /*
-     * 9. Handle human approval.
+     * 12. Handle requests requiring human approval.
      */
-    if (aiResponse.decision === 'REQUIRE_HUMAN_APPROVAL') {
+    if (
+      aiResponse.decision ===
+      'REQUIRE_HUMAN_APPROVAL'
+    ) {
       if (aiResponse.proposed_action) {
         await this.auditService.record(
           user.institutionId,
@@ -230,9 +302,11 @@ export class AgentService {
           {
             metadata: {
               tool: aiResponse.proposed_action.tool,
-              operation: aiResponse.proposed_action.operation,
-              arguments: aiResponse.proposed_action
-                .arguments as Prisma.InputJsonValue,
+              operation:
+                aiResponse.proposed_action.operation,
+              arguments:
+                aiResponse.proposed_action
+                  .arguments as Prisma.InputJsonValue,
             },
           },
         );
@@ -278,11 +352,9 @@ export class AgentService {
     }
 
     /*
-     * 10. ALLOW - Actionable vs Informational.
+     * 13. Handle informational ALLOW responses.
      */
     if (!aiResponse.proposed_action) {
-      // If there's no action, this is an informational query (e.g., POLICY_INQUIRY).
-      // Mark as completed and return the AI's reason to the user.
       await this.prisma.serviceRequest.update({
         where: {
           id: serviceRequest.id,
@@ -302,7 +374,7 @@ export class AgentService {
     }
 
     /*
-     * 11. Record the proposed institutional action.
+     * 14. Record the proposed institutional action.
      */
     await this.auditService.record(
       user.institutionId,
@@ -311,36 +383,47 @@ export class AgentService {
       {
         metadata: {
           tool: aiResponse.proposed_action.tool,
-          operation: aiResponse.proposed_action.operation,
-          arguments: aiResponse.proposed_action
-            .arguments as Prisma.InputJsonValue,
+          operation:
+            aiResponse.proposed_action.operation,
+          arguments:
+            aiResponse.proposed_action
+              .arguments as Prisma.InputJsonValue,
         },
       },
     );
 
     /*
-     * 12. Build trusted execution context.
+     * 15. Build trusted execution context.
      *
-     * None of these values come from the AI.
+     * These values never come from the AI model.
      */
     const context: ToolExecutionContext = {
       userId: user.id,
       institutionId: user.institutionId,
       requestId: serviceRequest.id,
+      role: user.role,
     };
 
     /*
-     * 13. Execute the AI-proposed institutional action.
+     * 16. Execute the AI-proposed institutional action.
+     *
+     * The result comes from the trusted institutional tool,
+     * not from the AI model.
      */
+    let toolResult: unknown;
+
     try {
-      await this.toolRegistry.execute(
+      toolResult = await this.toolRegistry.execute(
         aiResponse.proposed_action.tool,
         aiResponse.proposed_action.operation,
         aiResponse.proposed_action.arguments,
         context,
       );
     } catch (error) {
-      console.error('Institutional tool execution failed:', error);
+      console.error(
+        'Institutional tool execution failed:',
+        error,
+      );
 
       await this.prisma.serviceRequest.update({
         where: {
@@ -357,7 +440,8 @@ export class AgentService {
         'REQUEST_FAILED',
         {
           metadata: {
-            reason: 'Institutional tool execution failed',
+            reason:
+              'Institutional tool execution failed',
           },
         },
       );
@@ -366,7 +450,26 @@ export class AgentService {
     }
 
     /*
-     * 14. Record successful institutional execution.
+     * 17. Attach the trusted tool result to the response.
+     *
+     * This ensures that data returned to the client comes from
+     * the institutional system, not from the LLM.
+     */
+    if (
+      toolResult !== null &&
+      typeof toolResult === 'object' &&
+      !Array.isArray(toolResult)
+    ) {
+      aiResponse.execution_result =
+        toolResult as Record<string, unknown>;
+    } else {
+      aiResponse.execution_result = {
+        value: toolResult,
+      };
+    }
+
+    /*
+     * 18. Record successful institutional execution.
      */
     await this.auditService.record(
       user.institutionId,
@@ -381,7 +484,7 @@ export class AgentService {
     );
 
     /*
-     * 15. Mark the request as completed.
+     * 19. Mark the request as completed.
      */
     await this.prisma.serviceRequest.update({
       where: {
@@ -398,6 +501,10 @@ export class AgentService {
       'REQUEST_COMPLETED',
     );
 
+    /*
+     * 20. Return the AI reasoning plus the trusted
+     * institutional tool result.
+     */
     return aiResponse;
   }
 }

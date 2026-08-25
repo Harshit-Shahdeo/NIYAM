@@ -45,7 +45,7 @@ class LLMService:
         policy_context: str,
         conversation_context: str,
         retrieved_chunks: list[dict],
-        resources:list[dict],
+        resources: list[dict],
     ) -> dict[str, Any]:
         """
         Perform policy-grounded institutional reasoning.
@@ -79,10 +79,12 @@ You may receive:
 3. Conversation history
 4. Structured institutional policies
 5. Retrieved policy text
-6. Available tools
+6. Available resources
+7. Available institutional tools
 
 
 IMPORTANT REASONING RULES
+
 
 1. POLICY GROUNDING
 
@@ -105,6 +107,7 @@ Possible intents include:
 
 - POLICY_INQUIRY
 - LABORATORY_BOOKING
+- STUDENT_INFORMATION
 - GENERAL_QUERY
 - UNKNOWN
 
@@ -114,7 +117,13 @@ Prefer these intents whenever applicable.
 3. INFORMATIONAL REQUESTS
 
 If the user is asking for information about a policy, rule, limit,
-restriction, approval requirement, or institutional process:
+restriction, approval requirement, institutional process, or institutional
+information that can be retrieved through an available read-only tool:
+
+Use the appropriate available tool only when information must be retrieved
+from the institutional system.
+
+If no tool execution is required:
 
 proposed_action must be null.
 
@@ -152,7 +161,7 @@ Set proposed_action = null only when:
 - essential action information is missing
 - the requested resource cannot be matched confidently
 - the action cannot be safely constructed from the provided information
-- the request is informational
+- the request is informational and requires no institutional data lookup
 - the request is rejected
 
 
@@ -161,6 +170,7 @@ Set proposed_action = null only when:
 If the relevant policy clearly prohibits the request:
 
 decision = REJECT
+proposed_action = null
 
 
 7. POLICY CONFLICTS
@@ -208,6 +218,13 @@ Never invent:
 - operations
 - arguments
 
+The AI proposes the tool action, but the backend independently enforces
+authorization and institutional boundaries.
+
+Never assume that the caller is authorized merely because they requested
+an action.
+
+
 11. AVAILABLE RESOURCES AND TOOL ARGUMENTS
 
 The AVAILABLE RESOURCES section contains resources that currently exist
@@ -235,8 +252,8 @@ When proposing a LabBookingTool.book action:
 5. If the requested resource cannot be matched confidently to an
    available resource:
 
-   proposed_action = null
-   uncertainty_detected = true
+proposed_action = null
+uncertainty_detected = true
 
 For LabBookingTool.book:
 
@@ -260,13 +277,57 @@ Times must use:
 HH:MM
 
 
-12. DECISION RULES
+12. STUDENT INFORMATION TOOL
+
+StudentInfoTool provides access to student profile information.
+
+Available operation:
+
+getProfile(
+    studentId
+)
+
+The "studentId" argument is optional.
+
+Rules:
+
+1. When the user asks for their own student information, do not invent
+   a student ID.
+
+2. For a request about the caller's own profile, use:
+
+StudentInfoTool.getProfile({})
+
+3. If the user explicitly provides a student ID and asks for that
+   student's information, you may propose:
+
+StudentInfoTool.getProfile({
+    "studentId": "<provided student ID>"
+})
+
+4. Never invent a student ID.
+
+5. The backend independently enforces authorization:
+
+- Students may only access their own profile.
+- Faculty and admins may request another student's profile.
+- Institutional boundaries are enforced by the backend.
+
+6. If the requested student identity is unclear and cannot be resolved
+   from the user message or conversation:
+
+proposed_action = null
+uncertainty_detected = true
+
+
+13. DECISION RULES
 
 Use:
 
 ALLOW
 
-when the requested action is permitted and does not require approval.
+when the requested action or information retrieval is permitted and does
+not require human approval.
 
 Use:
 
@@ -282,7 +343,7 @@ REJECT
 when the relevant policy clearly prohibits the request.
 
 
-13. RESPONSE FORMAT
+14. RESPONSE FORMAT
 
 Return ONLY valid JSON.
 
@@ -312,6 +373,8 @@ The JSON must follow exactly this structure:
     "arguments": object
   } | null,
 
+  "sources": [],
+
   "reason": string
 }
 """.strip()
@@ -322,7 +385,7 @@ The JSON must follow exactly this structure:
         policies: list[dict],
         policy_context: str,
         conversation_context: str,
-        resources:list[dict],
+        resources: list[dict],
     ) -> dict[str, Any] | None:
         """
         Send the reasoning request to the configured LLM provider.
@@ -356,11 +419,14 @@ RETRIEVED POLICY CONTEXT
 
 {policy_context}
 
+
 AVAILABLE RESOURCES
 
-{json.dumps(resources,indent=2)}
+{json.dumps(resources, indent=2)}
+
 
 AVAILABLE TOOLS
+
 
 LabBookingTool
 
@@ -375,6 +441,23 @@ book(
 )
 
 
+StudentInfoTool
+
+Available operation:
+
+getProfile(
+    studentId
+)
+
+studentId is optional.
+
+For the authenticated student's own profile:
+
+arguments must be an empty object:
+
+{{}}
+
+
 INSTRUCTIONS
 
 Analyze the user's request.
@@ -384,7 +467,10 @@ Use the provided policies as the basis for institutional decisions.
 Use conversation history only when necessary to resolve references or
 follow-up requests.
 
-Do not invent missing user information.
+Only use tools listed above.
+
+Never invent tool names, operations, resource IDs, student IDs, or
+missing action details.
 
 Return only valid JSON matching the required schema.
 """.strip()
@@ -506,7 +592,7 @@ Return only valid JSON matching the required schema.
 
     def _fallback_response(self) -> dict[str, Any]:
         """
-        Safe fallback when no LLM provider is available.
+        Safe fallback when no provider is available.
         """
 
         return {
@@ -517,6 +603,7 @@ Return only valid JSON matching the required schema.
             "requires_approval": False,
             "decision": "REQUIRE_HUMAN_APPROVAL",
             "proposed_action": None,
+            "sources": [],
             "reason": (
                 "The AI reasoning service is currently unavailable."
             ),

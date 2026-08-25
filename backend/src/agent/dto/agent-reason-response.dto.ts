@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsIn,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   ValidateNested,
@@ -28,8 +29,15 @@ export class AgentReasonResponseDto {
   @IsBoolean()
   requires_approval!: boolean;
 
-  @IsIn(['ALLOW', 'REQUIRE_HUMAN_APPROVAL', 'REJECT'])
-  decision!: 'ALLOW' | 'REQUIRE_HUMAN_APPROVAL' | 'REJECT';
+  @IsIn([
+    'ALLOW',
+    'REQUIRE_HUMAN_APPROVAL',
+    'REJECT',
+  ])
+  decision!:
+    | 'ALLOW'
+    | 'REQUIRE_HUMAN_APPROVAL'
+    | 'REJECT';
 
   @IsOptional()
   @ValidateNested()
@@ -43,4 +51,13 @@ export class AgentReasonResponseDto {
 
   @IsString()
   reason!: string;
+
+  /*
+   * Result returned by an institutional tool after execution.
+   *
+   * This is populated by the backend, not by the AI model.
+   */
+  @IsOptional()
+  @IsObject()
+  execution_result?: Record<string, unknown>;
 }

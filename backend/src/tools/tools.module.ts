@@ -6,13 +6,28 @@ import { AuditModule } from '../audit/audit.module';
 
 import { LabBookingTool } from './scheduling/applications/laboratory/lab-booking.tool';
 import { SchedulingService } from './scheduling/core/scheduling.service';
+
+import { StudentInfoTool } from './student/student-info.tool';
+
 import { ToolRegistry } from './tool-registry';
 
 @Module({
-  imports: [DatabaseModule, DiscoveryModule, AuditModule],
+  imports: [
+    DatabaseModule,
+    DiscoveryModule,
+    AuditModule,
+  ],
 
-  providers: [ToolRegistry, SchedulingService, LabBookingTool],
+  providers: [
+    ToolRegistry,
+    SchedulingService,
+    LabBookingTool,
+    StudentInfoTool,
+  ],
 
-  exports: [ToolRegistry, SchedulingService],
+  exports: [
+    ToolRegistry,
+    SchedulingService,
+  ],
 })
-export class ToolsModule {}
+export class ToolsModule { }
