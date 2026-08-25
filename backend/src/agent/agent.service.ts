@@ -332,8 +332,10 @@ export class AgentService {
     /*
      * 13. Execute the AI-proposed institutional action.
      */
+    let executionResult: unknown;
+
     try {
-      await this.toolRegistry.execute(
+      executionResult = await this.toolRegistry.execute(
         aiResponse.proposed_action.tool,
         aiResponse.proposed_action.operation,
         aiResponse.proposed_action.arguments,
@@ -368,14 +370,18 @@ export class AgentService {
     /*
      * 14. Record successful institutional execution.
      */
+    const ticket = (executionResult as Record<string, unknown>)?.ticket;
+
     await this.auditService.record(
       user.institutionId,
       serviceRequest.id,
       'ACTION_EXECUTED',
       {
+        actorId: user.id,
         metadata: {
           tool: aiResponse.proposed_action.tool,
           operation: aiResponse.proposed_action.operation,
+          ...(ticket ? { ticket: ticket as Prisma.InputJsonValue } : {}),
         },
       },
     );

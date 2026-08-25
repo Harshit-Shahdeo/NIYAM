@@ -271,6 +271,8 @@ export class ApprovalsService {
       },
     });
 
+    const ticket = (executionResult as Record<string, unknown>)?.ticket;
+
     await this.auditService.logEvent({
       institutionId: approval.institutionId,
       requestId: approval.requestId,
@@ -281,6 +283,7 @@ export class ApprovalsService {
         approvalId: approval.id,
         tool: proposedAction.tool,
         operation: proposedAction.operation,
+        ...(ticket ? { ticket: ticket as Prisma.InputJsonValue } : {}),
       },
     });
 

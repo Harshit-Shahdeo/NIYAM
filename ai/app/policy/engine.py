@@ -218,3 +218,41 @@ def analyze_policies(
         parsed_policies.append(parsed_policy)
 
     return parsed_policies
+
+
+def extract_sources_from_policies(
+    retrieved_chunks: list[dict],
+) -> list[dict]:
+    """
+    Extract structured, verified policy document citations directly from retrieved policy chunks.
+    Filters out unverified or placeholder entries so only authentic policy citations are returned.
+    """
+    sources = []
+    seen = set()
+
+    for chunk in retrieved_chunks:
+        meta = chunk.get("metadata", {})
+        doc = (
+            meta.get("source")
+            or meta.get("document")
+            or "NIYAM Policy Handbook"
+        )
+        policy_id = meta.get("policy_id") or meta.get("id")
+        section = meta.get("section") or meta.get("title") or "General"
+        chunk_id = str(chunk.get("id", "") or meta.get("chunk_id", ""))
+
+        # Only emit genuine, non-placeholder citations
+        if policy_id and policy_id != "POL-UNKNOWN":
+            key = (doc, policy_id, section)
+            if key not in seen:
+                seen.add(key)
+                sources.append(
+                    {
+                        "document": doc,
+                        "policy_id": policy_id,
+                        "section": section,
+                        "chunk_id": chunk_id,
+                    }
+                )
+
+    return sources

@@ -4,7 +4,7 @@ from app.schemas.response import AgentReasonResponse
 from app.rag.retriever import retrieve_relevant_policies
 from app.rag.context import build_policy_context
 
-from app.policy.engine import analyze_policies
+from app.policy.engine import analyze_policies, extract_sources_from_policies
 
 from app.services.llm_service import LLMService
 from app.services.resource_service import ResourceService
@@ -17,10 +17,10 @@ class DecisionService:
     Flow:
         Request
         -> Retrieve relevant policy chunks
-        -> Parse policies
+        -> Parse policies using policy engine
         -> Build policy context
         -> LLM reasoning
-        -> Structured response
+        -> Structured response with policy citations
     """
 
     def __init__(self) -> None:
@@ -49,7 +49,7 @@ class DecisionService:
             limit=10,
         )
 
-        # 3. Parse retrieved policies into structured data.
+        # 3. Parse retrieved policies into structured data via policy engine.
         policies = analyze_policies(retrieved_chunks)
 
         # 4. Build readable policy context.
@@ -78,6 +78,12 @@ class DecisionService:
             retrieved_chunks=retrieved_chunks,
             resources=resources,
         )
+
+        # 6.1 Ensure sources from verified policy engine are attached if missing
+        if "sources" not in raw_response or not raw_response["sources"]:
+            raw_response["sources"] = extract_sources_from_policies(
+                retrieved_chunks
+            )
 
         # 7. Convert the LLM output into the API response schema.
         return AgentReasonResponse(
