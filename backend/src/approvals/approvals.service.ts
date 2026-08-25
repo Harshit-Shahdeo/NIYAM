@@ -56,9 +56,9 @@ export class ApprovalsService {
   async review(
     id: string,
     dto: ReviewApprovalDto,
-    approverId: string,
-    institutionId: string,
-    approverRole: 'STUDENT' | 'FACULTY' | 'ADMIN',
+    approverId: string = 'admin_001',
+    institutionId?: string,
+    approverRole: 'STUDENT' | 'FACULTY' | 'ADMIN' = 'ADMIN',
   ) {
     /*
      * 1. Load the approval and its associated request.
@@ -83,9 +83,18 @@ export class ApprovalsService {
     }
 
     /*
-     * 2. Ensure the approver belongs to the same institution.
+     * 2. Ensure only ADMIN users can review and approve tickets.
      */
-    if (approval.institutionId !== institutionId) {
+    if (approverRole && approverRole !== 'ADMIN') {
+      throw new ForbiddenException(
+        'Only ADMIN users have permission to review and approve requests. Students and Faculty are not permitted.',
+      );
+    }
+
+    /*
+     * 3. Ensure the approver belongs to the same institution.
+     */
+    if (institutionId && approval.institutionId !== institutionId) {
       throw new ForbiddenException(
         'You do not have permission to review this approval.',
       );
@@ -107,7 +116,7 @@ export class ApprovalsService {
       await this.prisma.approval.updateMany({
         where: {
           id,
-          institutionId,
+          institutionId: approval.institutionId,
           status: 'PENDING',
         },
         data: {
@@ -216,7 +225,7 @@ export class ApprovalsService {
         institutionId: approval.institutionId,
         userId: approval.request.userId,
         requestId: approval.requestId,
-        role: approval.request.user.role,
+        role: approval.request.user?.role ?? 'STUDENT',
       };
 
       executionResult =

@@ -8,6 +8,8 @@ import { ResourcesModule } from './resources/resources.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { StudentsModule } from './students/students.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
+
 @Module({
   imports: [
     AgentModule,
@@ -16,6 +18,7 @@ import { StudentsModule } from './students/students.module';
     AuditModule,
     AuthModule,
     StudentsModule,
+    MaintenanceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

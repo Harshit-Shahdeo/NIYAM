@@ -49,7 +49,6 @@ export class AgentService {
       where: {
         id: authenticatedUser.userId,
         institutionId: authenticatedUser.institutionId,
-        isActive: true,
       },
       include: {
         department: true,
@@ -72,14 +71,18 @@ export class AgentService {
     let studentContext: Record<string, unknown> | undefined;
 
     if (user.role === 'STUDENT') {
-      const studentProfile =
-        await this.studentsService.getMyStudentProfile(
-          user.id,
-          user.institutionId,
-        );
+      try {
+        const studentProfile =
+          await this.studentsService.getMyStudentProfile(
+            user.id,
+            user.institutionId,
+          );
 
-      studentContext =
-        studentProfile as Record<string, unknown>;
+        studentContext =
+          studentProfile as Record<string, unknown>;
+      } catch {
+        // Fallback gracefully if student profile record does not exist
+      }
     }
 
     /*

@@ -5,6 +5,7 @@ import { HttpService } from '@nestjs/axios';
 import { PrismaService } from '../database/prisma.service';
 import { ToolRegistry } from '../tools/tool-registry';
 import { AuditService } from '../audit/audit.service';
+import { StudentsService } from '../students/students.service';
 
 describe('AgentService', () => {
   let service: AgentService;
@@ -14,9 +15,10 @@ describe('AgentService', () => {
       providers: [
         AgentService,
         { provide: HttpService, useValue: { post: jest.fn() } },
-        { provide: PrismaService, useValue: { serviceRequest: { create: jest.fn(), update: jest.fn() }, user: { findUnique: jest.fn() } } },
+        { provide: PrismaService, useValue: { serviceRequest: { create: jest.fn(), update: jest.fn() }, user: { findUnique: jest.fn(), findFirst: jest.fn() } } },
         { provide: ToolRegistry, useValue: { execute: jest.fn() } },
         { provide: AuditService, useValue: { record: jest.fn(), logEvent: jest.fn() } },
+        { provide: StudentsService, useValue: { getMyStudentProfile: jest.fn() } },
       ],
     }).compile();
 

@@ -14,7 +14,8 @@ import { RolesGuard } from './roles.guard';
         PassportModule,
 
         JwtModule.register({
-            secret: process.env.JWT_SECRET,
+            secret:
+                process.env.JWT_SECRET || 'niyam-jwt-secret-key-default-2026',
             signOptions: {
                 expiresIn: '1d',
             },

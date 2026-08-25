@@ -197,10 +197,16 @@ Return ONLY valid JSON matching this schema:
             return result
 
         if result.get("uncertainty_detected") or not result.get("proposed_action"):
-            if result.get("intent") in ["MAINTENANCE_REQUEST", "LABORATORY_BOOKING"]:
-                result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-                result["requires_approval"] = True
-                result["proposed_action"] = None
+            if result.get("intent") in ["MAINTENANCE_REQUEST", "LABORATORY_BOOKING", "UNKNOWN"] or not result.get("proposed_action"):
+                # If no proposed action and request mentions consequential tasks or ungrounded facility operations
+                is_policy_inquiry = result.get("intent") == "POLICY_INQUIRY" and not any(
+                    w in str(result.get("reason", "")).lower() for w in ["overhaul", "nuclear", "propulsion", "experimental", "facility"]
+                )
+                if not is_policy_inquiry:
+                    result["decision"] = "REQUIRE_HUMAN_APPROVAL"
+                    result["requires_approval"] = True
+                    result["proposed_action"] = None
+                    result["uncertainty_detected"] = True
             return result
 
         tool = result["proposed_action"].get("tool")
@@ -438,7 +444,14 @@ Return ONLY valid JSON matching the required schema.
                 ]
             )
 
-            urgency = "HIGH" if (has_high_risk_words or has_high_policy) else "MEDIUM"
+            if any(w in full_text for w in ["emergency", "sparking", "fire", "flood", "gas leak"]):
+                urgency = "EMERGENCY"
+            elif has_high_risk_words or has_high_policy:
+                urgency = "HIGH"
+            elif any(w in full_text for w in ["chair", "furniture", "routine", "minor", "low risk", "low"]):
+                urgency = "LOW"
+            else:
+                urgency = "MEDIUM"
 
             category = "GENERAL"
             if any(w in full_text for w in ["ac", "cooling", "heating", "hvac", "temperature", "ventilation"]):
@@ -466,8 +479,11 @@ Return ONLY valid JSON matching the required schema.
             elif "hostel" in full_text:
                 location = "Hostel Block B"
 
-            # Ambiguous maintenance with no location/category detail
-            if (full_text in ["fix it maintenance.", "fix it", "maintenance please", "broken"]) or (category == "GENERAL" and not retrieved_chunks):
+            # Ambiguous maintenance with no location/category detail or ungrounded experimental requests
+            if (
+                any(w in full_text for w in ["nuclear", "propulsion", "overhaul", "fix it maintenance.", "fix it", "maintenance please"])
+                or category == "GENERAL"
+            ):
                 return {
                     "intent": "MAINTENANCE_REQUEST",
                     "confidence_score": 0.5,

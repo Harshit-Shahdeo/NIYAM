@@ -94,12 +94,24 @@ describe('AuditService', () => {
     });
 
     it('should return mapped timeline when request exists', async () => {
-      const mockReq = { id: 'req-1', externalId: 'req-ext-1' };
+      const mockReq = {
+        id: 'req-1',
+        externalId: 'req-ext-1',
+        userId: 'student-1',
+        institutionId: 'inst-1',
+        user: {
+          id: 'student-1',
+          name: 'Student',
+          email: 's@test.edu',
+          role: 'STUDENT',
+          passwordHash: 'secret-hash-123',
+        },
+      };
       const mockEvents = [
         {
           id: 'evt-1',
           eventType: 'REQUEST_RECEIVED',
-          actor: { id: 'u1', name: 'Student', email: 's@test.edu', role: 'STUDENT' },
+          actor: { id: 'student-1', name: 'Student', email: 's@test.edu', role: 'STUDENT' },
           metadata: {},
           createdAt: new Date('2026-08-23T00:00:00Z'),
         },
@@ -108,12 +120,37 @@ describe('AuditService', () => {
       mockPrisma.serviceRequest.findFirst.mockResolvedValue(mockReq);
       mockPrisma.auditEvent.findMany.mockResolvedValue(mockEvents);
 
-      const result = await service.getRequestTimeline('req-1');
-      expect(result.request).toEqual(mockReq);
+      const result = await service.getRequestTimeline('req-1', {
+        userId: 'student-1',
+        institutionId: 'inst-1',
+        role: 'STUDENT',
+      });
+
+      expect(result.request.id).toBe('req-1');
+      expect((result.request.user as any).passwordHash).toBeUndefined();
       expect(result.totalEvents).toBe(1);
       expect(result.timeline[0].step).toBe(1);
       expect(result.timeline[0].eventType).toBe('REQUEST_RECEIVED');
       expect(result.timeline[0].actor?.name).toBe('Student');
+    });
+
+    it('should throw ForbiddenException if student tries to access another student request', async () => {
+      const mockReq = {
+        id: 'req-2',
+        externalId: 'req-ext-2',
+        userId: 'other-student',
+        institutionId: 'inst-1',
+      };
+
+      mockPrisma.serviceRequest.findFirst.mockResolvedValue(mockReq);
+
+      await expect(
+        service.getRequestTimeline('req-2', {
+          userId: 'student-1',
+          institutionId: 'inst-1',
+          role: 'STUDENT',
+        }),
+      ).rejects.toThrow();
     });
   });
 });

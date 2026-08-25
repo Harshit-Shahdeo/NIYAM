@@ -16,6 +16,7 @@ describe('MaintenanceTicketTool', () => {
     institutionId: 'inst-1',
     userId: 'student-1',
     requestId: 'req-1',
+    role: 'STUDENT',
   };
 
   beforeEach(async () => {

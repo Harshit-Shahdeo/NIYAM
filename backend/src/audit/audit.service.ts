@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { AuditEventType, Prisma } from '@prisma/client';
 
@@ -78,7 +82,14 @@ export class AuditService {
     });
   }
 
-  async getRequestTimeline(requestId: string) {
+  async getRequestTimeline(
+    requestId: string,
+    user?: {
+      userId: string;
+      institutionId: string;
+      role: string;
+    },
+  ) {
     const request = await this.prisma.serviceRequest.findFirst({
       where: {
         OR: [{ id: requestId }, { externalId: requestId }],
@@ -98,14 +109,72 @@ export class AuditService {
       );
     }
 
+    // Role-based access control:
+    // If authenticated user is a STUDENT, they can ONLY view their own requests.
+    if (user && user.role === 'STUDENT' && request.userId !== user.userId) {
+      throw new ForbiddenException(
+        'You do not have permission to view this request timeline.',
+      );
+    }
+
+    // Institution boundary check
+    if (
+      user &&
+      user.institutionId &&
+      request.institutionId !== user.institutionId
+    ) {
+      throw new ForbiddenException(
+        'You do not have permission to view this request timeline.',
+      );
+    }
+
     const events = await this.prisma.auditEvent.findMany({
       where: { requestId: request.id },
       include: { actor: true },
       orderBy: { createdAt: 'asc' },
     });
 
+    // Sanitize user object to never expose passwordHash
+    const sanitizedUser = request.user
+      ? {
+          id: request.user.id,
+          institutionId: request.user.institutionId,
+          departmentId: request.user.departmentId,
+          name: request.user.name,
+          email: request.user.email,
+          role: request.user.role,
+          createdAt: request.user.createdAt,
+          updatedAt: request.user.updatedAt,
+        }
+      : null;
+
+    // Sanitize approval approver object to never expose passwordHash
+    const sanitizedApproval = request.approval
+      ? {
+          ...request.approval,
+          approver: request.approval.approver
+            ? {
+                id: request.approval.approver.id,
+                institutionId: request.approval.approver.institutionId,
+                departmentId: request.approval.approver.departmentId,
+                name: request.approval.approver.name,
+                email: request.approval.approver.email,
+                role: request.approval.approver.role,
+                createdAt: request.approval.approver.createdAt,
+                updatedAt: request.approval.approver.updatedAt,
+              }
+            : null,
+        }
+      : null;
+
+    const sanitizedRequest = {
+      ...request,
+      user: sanitizedUser,
+      approval: sanitizedApproval,
+    };
+
     return {
-      request,
+      request: sanitizedRequest,
       totalEvents: events.length,
       timeline: events.map((ev, index) => ({
         step: index + 1,
