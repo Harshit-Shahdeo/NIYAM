@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
@@ -12,7 +13,6 @@ import { ToolExecutionContext } from '../tools/tool-execution-context';
 
 export interface ReviewApprovalDto {
   decision: 'APPROVED' | 'REJECTED';
-  approverId?: string;
   notes?: string;
 }
 
@@ -28,16 +28,13 @@ export class ApprovalsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly toolRegistry: ToolRegistry,
-  ) {}
+  ) { }
 
-  async listPending(institutionId?: string) {
+  async listPending(institutionId: string) {
     const where: Prisma.ApprovalWhereInput = {
       status: 'PENDING',
+      institutionId,
     };
-
-    if (institutionId) {
-      where.institutionId = institutionId;
-    }
 
     return this.prisma.approval.findMany({
       where,
@@ -56,7 +53,13 @@ export class ApprovalsService {
     });
   }
 
-  async review(id: string, dto: ReviewApprovalDto) {
+  async review(
+    id: string,
+    dto: ReviewApprovalDto,
+    approverId: string,
+    institutionId: string,
+    approverRole: 'STUDENT' | 'FACULTY' | 'ADMIN',
+  ) {
     /*
      * 1. Load the approval and its associated request.
      */
@@ -80,7 +83,16 @@ export class ApprovalsService {
     }
 
     /*
-     * 2. Resolve the approval atomically.
+     * 2. Ensure the approver belongs to the same institution.
+     */
+    if (approval.institutionId !== institutionId) {
+      throw new ForbiddenException(
+        'You do not have permission to review this approval.',
+      );
+    }
+
+    /*
+     * 3. Resolve the approval atomically.
      *
      * Only update if the approval is still PENDING.
      * This prevents duplicate resolution and duplicate
@@ -95,11 +107,12 @@ export class ApprovalsService {
       await this.prisma.approval.updateMany({
         where: {
           id,
+          institutionId,
           status: 'PENDING',
         },
         data: {
           status: resolvedStatus,
-          approverId: dto.approverId || null,
+          approverId,
           resolvedAt: new Date(),
         },
       });
@@ -124,22 +137,22 @@ export class ApprovalsService {
     }
 
     /*
-     * 3. Handle rejection.
+     * 4. Handle rejection.
+     *
+     * No tool should execute if the approval is rejected.
      */
     if (dto.decision === 'REJECTED') {
       await this.auditService.logEvent({
         institutionId: approval.institutionId,
         requestId: approval.requestId,
-        userId:
-          dto.approverId ||
-          approval.request.userId,
+        userId: approverId,
         eventType: 'APPROVAL_REJECTED',
-        actor: 'FACULTY',
+        actor: approverRole,
         metadata: {
           approvalId: approval.id,
           notes:
             dto.notes ||
-            'Approval rejected by supervisor',
+            'Approval rejected by administrator',
         },
       });
 
@@ -155,39 +168,32 @@ export class ApprovalsService {
       return {
         status: 'REJECTED',
         approval: updatedApproval,
-        message: 'Request rejected by supervisor.',
+        message: 'Request rejected by administrator.',
       };
     }
 
     /*
-     * 4. Record approval.
+     * 5. Record approval.
      *
      * Approval succeeding does not mean that the
-     * requested action has been successfully executed.
+     * requested institutional action has successfully executed.
      */
     await this.auditService.logEvent({
       institutionId: approval.institutionId,
       requestId: approval.requestId,
-      userId:
-        dto.approverId ||
-        approval.request.userId,
+      userId: approverId,
       eventType: 'APPROVAL_GRANTED',
-      actor: 'FACULTY',
+      actor: approverRole,
       metadata: {
         approvalId: approval.id,
         notes:
           dto.notes ||
-          'Approval granted by supervisor',
+          'Approval granted by administrator',
       },
     });
 
     /*
-     * 5. Find and execute the proposed action.
-     *
-     * Only action lookup and execution are inside this
-     * try/catch. This prevents a later audit failure from
-     * incorrectly marking a successfully executed action
-     * as FAILED.
+     * 6. Find and execute the proposed action.
      */
     let executionResult: unknown;
     let proposedAction: ProposedAction;
@@ -210,6 +216,7 @@ export class ApprovalsService {
         institutionId: approval.institutionId,
         userId: approval.request.userId,
         requestId: approval.requestId,
+        role: approval.request.user.role,
       };
 
       executionResult =
@@ -226,11 +233,10 @@ export class ApprovalsService {
       );
 
       /*
-       * The approval remains APPROVED because the human
-       * successfully approved it.
+       * The human approval remains APPROVED because
+       * the administrator successfully approved it.
        *
-       * The service request FAILED because the actual
-       * institutional action could not be completed.
+       * However, the actual institutional action failed.
        */
       await this.prisma.serviceRequest.update({
         where: {
@@ -260,7 +266,7 @@ export class ApprovalsService {
     }
 
     /*
-     * 6. The institutional tool executed successfully.
+     * 7. The institutional tool executed successfully.
      */
     await this.prisma.serviceRequest.update({
       where: {
@@ -288,7 +294,7 @@ export class ApprovalsService {
     });
 
     /*
-     * 7. Return successful execution result.
+     * 8. Return the successful result.
      */
     return {
       status: 'APPROVED',

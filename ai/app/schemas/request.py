@@ -1,4 +1,5 @@
 from typing import Any, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -17,5 +18,11 @@ class ConversationMessage(BaseModel):
 class AgentReasonRequest(BaseModel):
     request_id: str
     message: str
+
     user: AgentUserDto
-    conversation: list[ConversationMessage] = Field(default_factory=list)
+
+    conversation: list[ConversationMessage] = Field(
+        default_factory=list,
+    )
+
+    student_context: Optional[dict[str, Any]] = None

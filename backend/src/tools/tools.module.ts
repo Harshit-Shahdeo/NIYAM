@@ -7,18 +7,31 @@ import { AuditModule } from '../audit/audit.module';
 import { LabBookingTool } from './scheduling/applications/laboratory/lab-booking.tool';
 import { MaintenanceTicketTool } from './maintenance/maintenance-ticket.tool';
 import { SchedulingService } from './scheduling/core/scheduling.service';
+
+import { StudentInfoTool } from './student/student-info.tool';
+
 import { ToolRegistry } from './tool-registry';
 
 @Module({
-  imports: [DatabaseModule, DiscoveryModule, AuditModule],
+  imports: [
+    DatabaseModule,
+    DiscoveryModule,
+    AuditModule,
+  ],
 
   providers: [
     ToolRegistry,
     SchedulingService,
     LabBookingTool,
     MaintenanceTicketTool,
+    StudentInfoTool,
   ],
 
-  exports: [ToolRegistry, SchedulingService, MaintenanceTicketTool],
+  exports: [
+    ToolRegistry,
+    SchedulingService,
+    MaintenanceTicketTool,
+    StudentInfoTool,
+  ],
 })
-export class ToolsModule {}
+export class ToolsModule { }
