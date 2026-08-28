@@ -9,13 +9,13 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/authenticated-user.interface';
+
 import { ApprovalsService } from './approvals.service';
 import type { ReviewApprovalDto } from './approvals.service';
-
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
-import { Roles } from '../auth/roles.decorator';
 
 @Controller('approvals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -25,30 +25,32 @@ export class ApprovalsController {
     private readonly approvalsService: ApprovalsService,
   ) { }
 
+  /*
+   * Return all pending approvals belonging to the
+   * authenticated administrator's institution.
+   */
   @Get()
   async listPending(
-    @Req() request: Request & { user?: AuthenticatedUser },
+    @Req() request: Request & { user: AuthenticatedUser },
   ) {
-    const institutionId =
-      request.user?.institutionId ||
-      '355a8671-0fc1-4efe-9a36-803e1dbbfefe';
-
     return this.approvalsService.listPending(
-      institutionId,
+      request.user.institutionId,
     );
   }
 
+  /*
+   * Review an approval.
+   *
+   * Identity, institution, and role are taken from
+   * the authenticated JWT user rather than the request body.
+   */
   @Post(':id/review')
   async review(
     @Param('id') id: string,
     @Body() dto: ReviewApprovalDto,
-    @Req() request: Request & { user?: AuthenticatedUser },
+    @Req() request: Request & { user: AuthenticatedUser },
   ) {
-    const user = request.user || {
-      userId: 'admin_001',
-      institutionId: '355a8671-0fc1-4efe-9a36-803e1dbbfefe',
-      role: 'ADMIN' as const,
-    };
+    const user = request.user;
 
     return this.approvalsService.review(
       id,

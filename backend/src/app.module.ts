@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -9,6 +10,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { StudentsModule } from './students/students.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -19,6 +21,7 @@ import { MaintenanceModule } from './maintenance/maintenance.module';
     AuthModule,
     StudentsModule,
     MaintenanceModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

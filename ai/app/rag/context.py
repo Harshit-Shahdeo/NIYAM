@@ -7,18 +7,20 @@ def build_policy_context(results: list[dict]) -> str:
     for index, result in enumerate(results, start=1):
         metadata = result.get("metadata") or {}
 
-        section = metadata.get("section", "Unknown")
-        chunk_index = metadata.get("chunk_index", "Unknown")
-        similarity = result.get("similarity", 0)
+        document = metadata.get("document", metadata.get("source", "Unknown"))
+        policy_id = metadata.get("policy_id", metadata.get("id", "Unknown"))
+        section = metadata.get("section", metadata.get("title", "Unknown"))
+        chunk_id = str(result.get("id") or metadata.get("chunk_id", "Unknown"))
 
         sections.append(
             f"""
-POLICY CONTEXT {index}
-Similarity: {similarity:.4f}
+POLICY EVIDENCE {index}
+Document: {document}
+Policy ID: {policy_id}
 Section: {section}
-Chunk Index: {chunk_index}
+Chunk ID: {chunk_id}
 
-{result["content"]}
+{result.get("content", "")}
 """.strip()
         )
 

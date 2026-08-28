@@ -13,6 +13,18 @@ import { Type } from 'class-transformer';
 import { ProposedActionDto } from './proposed-action.dto';
 import { AgentSourceDto } from './agent-source.dto';
 
+export class ExecutionErrorDto {
+  @IsNumber()
+  code!: number;
+
+  @IsString()
+  message!: string;
+
+  @IsOptional()
+  @IsObject()
+  nextAvailable?: Record<string, unknown>;
+}
+
 export class AgentReasonResponseDto {
   @IsString()
   intent!: string;
@@ -52,6 +64,10 @@ export class AgentReasonResponseDto {
   @IsString()
   reason!: string;
 
+  @IsOptional()
+  @IsString()
+  assistant_message?: string;
+
   /*
    * Result returned by an institutional tool after execution.
    *
@@ -60,4 +76,9 @@ export class AgentReasonResponseDto {
   @IsOptional()
   @IsObject()
   execution_result?: Record<string, unknown>;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ExecutionErrorDto)
+  execution_error?: ExecutionErrorDto;
 }

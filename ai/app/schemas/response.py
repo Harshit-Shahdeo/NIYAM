@@ -25,3 +25,4 @@ class AgentReasonResponse(BaseModel):
     proposed_action: Optional[ProposedAction] = None
     sources: list[Source] = Field(default_factory=list)
     reason: str
+    assistant_message: Optional[str] = None

@@ -46,7 +46,7 @@ class DecisionService:
         # 2. Retrieve relevant policy chunks.
         retrieved_chunks = retrieve_relevant_policies(
             query=query,
-            limit=10,
+            limit=5,
         )
 
         # 3. Parse retrieved policies into structured data via policy engine.

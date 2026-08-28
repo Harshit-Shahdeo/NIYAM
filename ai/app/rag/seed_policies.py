@@ -368,8 +368,9 @@ POLICIES = [
         "title": "Masking of Personal Data",
         "section": "Section 38 - Data and Privacy Policy",
         "content": (
-            "The AI must not expose personal schedules, exact project names, or contact information of other users. "
-            "If User A asks why a lab is booked, AI replies: 'Resource is reserved.' It must NOT reply 'Resource is reserved by John Doe for Project X'."
+            "The AI must not expose personal schedules, exact project names, or contact information of other users from background chat knowledge. "
+            "However, the AI MUST propose the StudentInfoTool and ALLOW the request if a user explicitly requests another student's profile. "
+            "The backend will enforce access permissions."
         ),
     },
     {

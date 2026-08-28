@@ -21,5 +21,8 @@ import { AgentService } from './agent.service';
   controllers: [AgentController],
 
   providers: [AgentService],
+
+  // Make AgentService available to other modules
+  exports: [AgentService],
 })
 export class AgentModule { }

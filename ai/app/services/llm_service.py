@@ -1,7 +1,5 @@
 import json
 import os
-import re
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +7,7 @@ import httpx
 from dotenv import load_dotenv
 
 from app.schemas.request import AgentReasonRequest
+
 
 AI_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = AI_ROOT.parent
@@ -25,14 +24,247 @@ if BACKEND_ENV_PATH.exists():
 
 class LLMService:
     """
-    LLM client responsible for policy-grounded institutional reasoning.
-    Supports Groq, OpenAI, and policy-driven fallback.
+    Policy-grounded institutional reasoning service.
+
+    Responsibility boundaries:
+
+    LLM:
+        - Understands the current user request.
+        - Classifies intent.
+        - Extracts tool arguments.
+        - Uses retrieved policy evidence to reason about rules explicitly
+          mentioned in institutional policy documents.
+        - Produces a structured proposed action.
+
+    Backend authorization:
+        - Is the final authority for whether the authenticated user is
+          permitted to perform an action.
+        - Resolves permissions when policy documents are silent.
+        - Can deny or escalate any action proposed by the LLM.
+
+    Deterministic guardrails:
+        - Validate LLM output structure.
+        - Validate tool names and operations.
+        - Validate required arguments.
+        - Prevent fabricated arguments.
+        - Prevent unsupported autonomous actions.
+        - Never override backend authorization.
     """
 
+    VALID_INTENTS = {
+        "POLICY_INQUIRY",
+        "LABORATORY_BOOKING",
+        "MAINTENANCE_REQUEST",
+        "STUDENT_INFORMATION",
+        "GENERAL_QUERY",
+        "UNKNOWN",
+    }
+
+    VALID_DECISIONS = {
+        "ALLOW",
+        "REQUIRE_HUMAN_APPROVAL",
+        "REJECT",
+    }
+
+    TOOL_SCHEMAS = {
+        "LabBookingTool": {
+            "operation": "book",
+            "required": {
+                "resource",
+                "date",
+                "start",
+                "end",
+            },
+        },
+        "MaintenanceTicketTool": {
+            "operation": "create",
+            "required": {
+                "location",
+                "category",
+                "description",
+            },
+        },
+        "StudentInfoTool": {
+            "operation": "getProfile",
+            "required": set(),
+        },
+    }
+
+    VALID_MAINTENANCE_CATEGORIES = {
+        "ELECTRICAL",
+        "PLUMBING",
+        "HVAC",
+        "IT",
+        "CIVIL",
+        "LAB_EQUIPMENT",
+    }
+
+    VALID_URGENCY_LEVELS = {
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "EMERGENCY",
+    }
+
     def __init__(self) -> None:
-        self.mode = os.getenv("LLM_MODE", "live").lower()
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.mode = os.getenv(
+            "LLM_MODE",
+            "live",
+        ).lower()
+
+        self.groq_api_key = os.getenv(
+            "GROQ_API_KEY",
+        )
+
+        self.openai_api_key = os.getenv(
+            "OPENAI_API_KEY",
+        )
+
+        self.groq_model = os.getenv(
+            "GROQ_MODEL",
+            "openai/gpt-oss-120b",
+        )
+
+        self.openai_model = os.getenv(
+            "OPENAI_MODEL",
+            "gpt-4o",
+        )
+
+        self.max_conversation_chars = self._get_int_env(
+            "LLM_MAX_CONVERSATION_CHARS",
+            4000,
+        )
+
+        self.max_policy_context_chars = self._get_int_env(
+            "LLM_MAX_POLICY_CONTEXT_CHARS",
+            5000,
+        )
+
+        self.max_retrieved_chunks = self._get_int_env(
+            "LLM_MAX_RETRIEVED_CHUNKS",
+            4,
+        )
+
+        self.max_chunk_chars = self._get_int_env(
+            "LLM_MAX_CHUNK_CHARS",
+            1500,
+        )
+
+        self.max_structured_policies = self._get_int_env(
+            "LLM_MAX_STRUCTURED_POLICIES",
+            4,
+        )
+
+        self.max_policy_chars = self._get_int_env(
+            "LLM_MAX_POLICY_CHARS",
+            1200,
+        )
+
+        self.max_resources = self._get_int_env(
+            "LLM_MAX_RESOURCES",
+            10,
+        )
+
+        self.max_resource_chars = self._get_int_env(
+            "LLM_MAX_RESOURCE_CHARS",
+            800,
+        )
+
+        self.max_output_tokens = self._get_int_env(
+            "LLM_MAX_OUTPUT_TOKENS",
+            1000,
+        )
+
+        print("\n" + "=" * 80)
+        print("[LLMService] Initialized")
+        print("=" * 80)
+
+        print(f"[LLMService] Mode: {self.mode}")
+
+        print(
+            "[LLMService] Groq configured: "
+            f"{'YES' if self.groq_api_key else 'NO'}"
+        )
+
+        print(
+            "[LLMService] Groq model: "
+            f"{self.groq_model}"
+        )
+
+        print(
+            "[LLMService] OpenAI configured: "
+            f"{'YES' if self.openai_api_key else 'NO'}"
+        )
+
+        if self.openai_api_key:
+            print(
+                "[LLMService] OpenAI model: "
+                f"{self.openai_model}"
+            )
+
+        print("\n[LLMService] Prompt limits:")
+
+        print(
+            "[LLMService] Max conversation chars: "
+            f"{self.max_conversation_chars}"
+        )
+
+        print(
+            "[LLMService] Max policy context chars: "
+            f"{self.max_policy_context_chars}"
+        )
+
+        print(
+            "[LLMService] Max retrieved chunks: "
+            f"{self.max_retrieved_chunks}"
+        )
+
+        print(
+            "[LLMService] Max chars per chunk: "
+            f"{self.max_chunk_chars}"
+        )
+
+        print(
+            "[LLMService] Max structured policies: "
+            f"{self.max_structured_policies}"
+        )
+
+        print(
+            "[LLMService] Max output tokens: "
+            f"{self.max_output_tokens}"
+        )
+
+        print("=" * 80)
+
+    def _get_int_env(
+        self,
+        name: str,
+        default: int,
+    ) -> int:
+        """
+        Safely read a positive integer environment variable.
+        """
+
+        raw_value = os.getenv(name)
+
+        if raw_value is None:
+            return default
+
+        try:
+            value = int(raw_value)
+
+            if value <= 0:
+                raise ValueError
+
+            return value
+
+        except ValueError:
+            print(
+                f"[LLMService] Invalid value for {name}: "
+                f"{raw_value}. Using default {default}."
+            )
+
+            return default
 
     def reason(
         self,
@@ -44,9 +276,49 @@ class LLMService:
         resources: list[dict],
     ) -> dict[str, Any]:
         """
-        Perform policy-grounded institutional reasoning.
+        Perform policy-grounded reasoning.
+
+        Important:
+        The returned decision is a reasoning recommendation.
+
+        Final authorization and permission enforcement must happen in the
+        backend authorization layer before a consequential tool is executed.
         """
+
+        print("\n" + "=" * 80)
+        print("[LLMService] NEW REASONING REQUEST")
+        print("=" * 80)
+
+        print(
+            f"[LLMService] User message: "
+            f"{request.message}"
+        )
+
+        print(
+            f"[LLMService] Mode: "
+            f"{self.mode}"
+        )
+
+        print(
+            "[LLMService] Policies count: "
+            f"{len(policies or [])}"
+        )
+
+        print(
+            "[LLMService] Retrieved chunks count: "
+            f"{len(retrieved_chunks or [])}"
+        )
+
+        print(
+            "[LLMService] Resources count: "
+            f"{len(resources or [])}"
+        )
+
         if self.mode == "live":
+            print(
+                "[LLMService] Attempting LIVE LLM reasoning."
+            )
+
             result = self._call_live_llm(
                 request=request,
                 policies=policies,
@@ -55,38 +327,184 @@ class LLMService:
                 resources=resources,
                 retrieved_chunks=retrieved_chunks,
             )
+
             if result is not None:
+                print(
+                    "[LLMService] LIVE LLM reasoning succeeded."
+                )
+
+                print(
+                    "[LLMService] Final result:\n"
+                    + json.dumps(
+                        result,
+                        indent=2,
+                    )
+                )
+
                 return result
 
-        return self._deterministic_reason(
+            print(
+                "[LLMService] Live LLM reasoning failed. "
+                "Using safe fallback."
+            )
+
+        else:
+            print(
+                "[LLMService] Live mode disabled. "
+                "Using safe fallback."
+            )
+
+        result = self._safe_fallback(
             request=request,
-            policies=policies,
             retrieved_chunks=retrieved_chunks,
-            resources=resources,
         )
 
+        print(
+            "[LLMService] Fallback result:\n"
+            + json.dumps(
+                result,
+                indent=2,
+            )
+        )
+
+        return result
+
     def _build_system_prompt(self) -> str:
+        """
+        Build the stable system prompt.
+
+        Policy hierarchy:
+
+        1. Retrieved institutional policy evidence is authoritative for
+           rules explicitly stated in that evidence.
+
+        2. If policy evidence does not mention a permission, restriction,
+           approval requirement, or access rule, do NOT invent one.
+
+        3. Backend authorization is the source of truth for permissions
+           and access decisions not explicitly resolved by policy evidence.
+
+        4. Your output may propose an action, but the backend performs
+           final authorization before execution.
+        """
+
         return """
 You are NIYAM, an institutional AI reasoning engine.
 
-Your responsibility is to understand user requests, reason over institutional policies, and produce structured decisions.
+Your job is to understand the user's CURRENT request and return a
+structured reasoning decision.
 
 You may receive:
-1. A user profile (id, role, department, year)
-2. The current user message
-3. Conversation history
-4. Structured institutional policies
-5. Retrieved policy text chunks
-6. Available institutional resources
-7. Available institutional tools
+- authenticated user profile
+- current user message
+- conversation history
+- relevant institutional policies
+- retrieved policy evidence
+- available institutional resources
+- available institutional tools
 
-IMPORTANT REASONING RULES:
+============================================================
+AUTHORITY MODEL
+============================================================
 
-1. POLICY GROUNDING
-Ground all institutional decisions strictly in the provided policies. Do not invent rules or policies.
+The system has two sources of institutional authority:
 
-2. UNDERSTAND THE USER'S INTENT
-Classify the intent into one of:
+1. RETRIEVED POLICY DOCUMENTS
+
+Retrieved policy evidence is authoritative for institutional rules that
+are explicitly stated in that evidence.
+
+Examples include:
+- approval requirements
+- booking limits
+- restricted resources
+- eligibility rules
+- maintenance procedures
+- prohibited actions
+- institutional conditions
+
+If relevant retrieved policy evidence explicitly states a rule, follow it.
+
+2. BACKEND AUTHORIZATION
+
+Backend authorization is the final source of truth for:
+- user permissions
+- role-based access
+- ownership
+- departmental access
+- resource access
+- permissions not explicitly addressed by retrieved policy evidence
+
+If the retrieved policy evidence is silent about whether the user is
+allowed to perform an action, DO NOT invent a permission rule and DO NOT
+invent a restriction.
+
+Instead, propose the action when its required information is available.
+The backend authorization layer will determine whether the authenticated
+user is actually permitted to execute it.
+
+You NEVER override backend authorization.
+
+Your ALLOW decision means:
+
+"The request is sufficiently understood and no retrieved policy evidence
+requires rejection or human approval. The action may proceed to backend
+authorization."
+
+It does NOT mean:
+
+"The action is definitely authorized or successfully executed."
+
+============================================================
+GENERAL RULES
+============================================================
+
+- Determine intent primarily from the CURRENT USER MESSAGE.
+- Conversation history may be used to resolve references and preserve
+  previously supplied action arguments when the CURRENT USER MESSAGE clearly
+  continues, confirms, accepts, or modifies the same action.
+- Never create a new action merely because an earlier conversation
+  contained an action.
+- Never reuse historical arguments for a new or unrelated action.
+- If the current message explicitly changes an argument, the current message
+  takes precedence over conversation history.
+- Never invent policies, permissions, locations, resources, student data,
+  IDs, dates, booking times, maintenance categories, or approval
+  requirements.
+- Do not infer approval requirements from personal intuition.
+- Do not create your own institutional rules.
+- If retrieved policy evidence explicitly requires approval, set:
+  requires_approval = true
+  decision = "REQUIRE_HUMAN_APPROVAL"
+- If retrieved policy evidence explicitly rejects or prohibits an action,
+  set:
+  decision = "REJECT"
+  (EXCEPTION: Do not apply PRIV-001 to reject StudentInfoTool requests. Always set decision = "ALLOW" and propose the action, letting the backend enforce privacy.)
+- If policy evidence is silent, do not treat silence as rejection or as
+  guaranteed authorization.
+- Backend authorization will make the final permission decision.
+
+If required action information is missing or ambiguous:
+- You may resolve missing action arguments from relevant conversation history
+  only when the CURRENT USER MESSAGE clearly continues, confirms, accepts, or
+  modifies the same action.
+- Never reuse historical arguments for a new or unrelated action.
+- The CURRENT USER MESSAGE takes precedence over conflicting historical values.
+- If the information still cannot be determined without invention:
+  - uncertainty_detected = true
+  - proposed_action = null
+  - do not invent missing values
+
+If an action requires human approval according to retrieved policy
+evidence:
+- fully populate proposed_action when sufficient action information exists
+- set requires_approval = true
+- set decision = "REQUIRE_HUMAN_APPROVAL"
+
+============================================================
+INTENT TYPES
+============================================================
+
 - POLICY_INQUIRY
 - LABORATORY_BOOKING
 - MAINTENANCE_REQUEST
@@ -94,62 +512,244 @@ Classify the intent into one of:
 - GENERAL_QUERY
 - UNKNOWN
 
-3. INFORMATIONAL REQUESTS
-If the user asks for rules, policies, limits, or general information:
-- intent = POLICY_INQUIRY or GENERAL_QUERY
-- proposed_action = null
-- decision = ALLOW
+CURRENT INTENT RULE:
 
-4. ACTIONABLE REQUESTS
-Extract only information explicitly provided or clearly stated in conversation history.
-If essential information is missing or ambiguous:
+"What was the ticket ID created earlier?"
+
+This is GENERAL_QUERY, not a new maintenance request.
+
+"What booking did I make earlier?"
+
+This is GENERAL_QUERY, not a new laboratory booking.
+
+============================================================
+STUDENT INFORMATION
+============================================================
+
+For requests for institutional profiles or student details, use:
+
+{
+  "tool": "StudentInfoTool",
+  "operation": "getProfile",
+  "arguments": {
+    "studentId": "string (optional, provide if requesting another user's profile)"
+  }
+}
+
+Examples:
+- Show me my profile
+- Show my student details
+- What is my CGPA?
+- What is the profile of student_002? (Set studentId to "student_002")
+
+Do not invent student information.
+
+The tool retrieves the information.
+
+The backend is responsible for enforcing whether the authenticated user
+may access the requested information.
+
+CRITICAL RULE FOR PRIV-001:
+You MUST NEVER set decision = "REJECT" for a student profile request due to PRIV-001. PRIV-001 strictly applies to exposing background chat knowledge, NOT to authorized tool usage. You MUST propose the StudentInfoTool action and set decision = "ALLOW". The backend will enforce access controls.
+
+============================================================
+POLICY AND GENERAL QUESTIONS
+============================================================
+
+Questions about:
+- rules
+- policies
+- limits
+- durations
+- guidelines
+- clarification
+- previous conversation information
+
+are informational unless the CURRENT USER MESSAGE explicitly requests a
+new action.
+
+For informational requests:
+
 - proposed_action = null
+- requires_approval = false
+- decision = "ALLOW"
+
+Answer using available retrieved evidence and conversation context.
+
+If the exact answer cannot be determined, clearly say so rather than
+inventing information.
+
+============================================================
+MAINTENANCE REQUESTS
+============================================================
+
+Only create MaintenanceTicketTool when the user is actually requesting
+an issue to be reported, repaired, fixed, or processed.
+
+Required:
+- location
+- category
+- description
+
+Optional:
+- urgency
+
+Allowed categories:
+- ELECTRICAL
+- PLUMBING
+- HVAC
+- IT
+- CIVIL
+- LAB_EQUIPMENT
+
+Allowed urgency:
+- LOW
+- MEDIUM
+- HIGH
+- EMERGENCY
+
+Do not invent location.
+
+Do not invent category.
+
+Do not invent urgency if the user's request does not provide enough
+information to determine it.
+
+If required information is missing or ambiguous:
 - uncertainty_detected = true
-- decision = REQUIRE_HUMAN_APPROVAL
+- proposed_action = null
 
-5. LABORATORY BOOKING RULES (LabBookingTool)
-For LabBookingTool.book:
-Required arguments: resource, date (YYYY-MM-DD), start (HH:MM), end (HH:MM)
-Optional: purpose
-- Standard daytime duration (<= 2 hours): decision = ALLOW, requires_approval = false
-- Extended duration (> 2 hours), after-hours, or during exam week: decision = REQUIRE_HUMAN_APPROVAL, requires_approval = true
+Do NOT automatically require human approval merely because information is
+missing. The user may simply need to provide clarification.
 
-6. MAINTENANCE REQUEST RULES (MaintenanceTicketTool)
-For MaintenanceTicketTool.create:
-Required arguments:
-- location: string (room, lab, or building identifier)
-- category: string (one of: ELECTRICAL, PLUMBING, HVAC, IT, CIVIL, LAB_EQUIPMENT)
-- description: string (detailed issue description)
-Optional argument:
-- urgency: string (one of: LOW, MEDIUM, HIGH, EMERGENCY; default: MEDIUM)
+If retrieved policy evidence explicitly requires approval for the
+maintenance request, set:
 
-RISK-BASED GOVERNANCE RULES FOR MAINTENANCE:
-- LOW / MEDIUM Risk (e.g. routine AC maintenance, projector not working, tube light flickering, broken chair, minor civil repair):
-  * decision = "ALLOW"
-  * requires_approval = false
-  * MaintenanceTicketTool can execute automatically to dispatch routine facilities support.
-- HIGH / EMERGENCY Risk (e.g. electrical sparks, live wires, fire hazard, flooding/burst pipes, hazardous gas leak, severe laboratory equipment damage, structural hazard):
-  * decision = "REQUIRE_HUMAN_APPROVAL"
-  * requires_approval = true
-  * NEVER execute automatically; must route for administrator/faculty review.
+- requires_approval = true
+- decision = "REQUIRE_HUMAN_APPROVAL"
 
-7. STUDENT INFORMATION RULES (StudentInfoTool)
-For StudentInfoTool.getProfile:
-Arguments: studentId (optional string)
-- For the authenticated caller's own profile: arguments = {}
-- If user requests another student by ID: arguments = {"studentId": "<id>"}
-- decision = ALLOW
+Otherwise, if the request is complete and no retrieved policy evidence
+requires escalation, the proposed action may be:
 
-8. LANGUAGE
-Support English, Hindi, and Hinglish.
+- decision = "ALLOW"
 
-9. AVAILABLE TOOLS
-- LabBookingTool.book(resource, date, start, end, purpose)
-- MaintenanceTicketTool.create(location, category, description, urgency)
-- StudentInfoTool.getProfile(studentId)
+The backend authorization layer will still decide whether execution is
+permitted.
 
-10. RESPONSE FORMAT
-Return ONLY valid JSON matching this schema:
+============================================================
+LABORATORY BOOKING
+============================================================
+
+Only create LabBookingTool when the CURRENT USER MESSAGE explicitly
+requests a laboratory booking or reservation.
+
+Required:
+- resource
+- date in YYYY-MM-DD
+- start in HH:MM
+- end in HH:MM
+
+Optional:
+- purpose
+
+For a clear continuation or confirmation of the same booking, you may preserve
+purpose from relevant conversation history if it was previously supplied and the
+current message does not replace it.
+
+Do not invent missing values or reuse purpose from an unrelated booking.
+
+If required information is missing or ambiguous:
+
+- uncertainty_detected = true
+- proposed_action = null
+
+Do not invent an approval requirement merely because the booking is long,
+late, unusual, or otherwise appears exceptional.
+
+Only retrieved institutional policy evidence can establish policy-based
+approval requirements.
+
+If policy evidence explicitly requires approval:
+
+- requires_approval = true
+- decision = "REQUIRE_HUMAN_APPROVAL"
+
+Otherwise, when the request is complete:
+
+- decision = "ALLOW"
+
+The backend authorization layer will determine whether the user has
+permission to book the resource.
+
+============================================================
+AVAILABLE TOOLS
+============================================================
+
+LabBookingTool:
+
+{
+  "tool": "LabBookingTool",
+  "operation": "book",
+  "arguments": {
+    "resource": string,
+    "date": "YYYY-MM-DD",
+    "start": "HH:MM",
+    "end": "HH:MM",
+    "purpose": string | null
+  }
+}
+
+MaintenanceTicketTool:
+
+{
+  "tool": "MaintenanceTicketTool",
+  "operation": "create",
+  "arguments": {
+    "location": string,
+    "category": "ELECTRICAL" | "PLUMBING" | "HVAC" |
+                "IT" | "CIVIL" | "LAB_EQUIPMENT",
+    "description": string,
+    "urgency": "LOW" | "MEDIUM" | "HIGH" | "EMERGENCY"
+  }
+}
+
+StudentInfoTool:
+
+{
+  "tool": "StudentInfoTool",
+  "operation": "getProfile",
+  "arguments": {
+    "studentId": "string (optional)"
+  }
+}
+
+============================================================
+POLICY SOURCES
+============================================================
+
+For every policy rule that materially affects your decision, include the
+corresponding retrieved evidence in sources.
+
+Use:
+
+{
+  "document": string,
+  "policy_id": string,
+  "section": string,
+  "chunk_id": string
+}
+
+Do not invent source identifiers.
+
+If no policy evidence materially affected the decision, sources may be an
+empty array.
+
+============================================================
+RESPONSE
+============================================================
+
+Return ONLY valid JSON using exactly this structure:
+
 {
   "intent": string,
   "confidence_score": number,
@@ -170,9 +770,840 @@ Return ONLY valid JSON matching this schema:
       "chunk_id": string
     }
   ],
-  "reason": string
+  "reason": string,
+  "assistant_message": string
 }
+
+You MUST always provide a meaningful natural-language assistant_message.
+
+ALLOW:
+Explain the answer or state that the request can proceed to the next
+stage.
+
+If an action is proposed, do NOT claim it has been executed.
+
+Do not say that the user is definitely authorized.
+
+REQUIRE_HUMAN_APPROVAL:
+Clearly explain that institutional policy requires human review or
+approval.
+
+Clearly state that the requested action has NOT yet been executed.
+
+REJECT:
+Clearly explain which retrieved policy rule prevents processing.
+
+Do not invent a rejection reason.
+
+UNCERTAIN / INCOMPLETE:
+Clearly explain what information is missing.
+
+Ask for clarification when appropriate.
+
+INFORMATIONAL QUERIES:
+Directly answer using available context and retrieved evidence.
+
+Do not wrap JSON in markdown.
+Do not include explanations outside JSON.
 """.strip()
+
+    def _truncate_text(
+        self,
+        value: Any,
+        max_chars: int,
+    ) -> Any:
+        """
+        Safely truncate strings.
+        """
+
+        if not isinstance(value, str):
+            return value
+
+        if len(value) <= max_chars:
+            return value
+
+        return value[:max_chars] + "\n[TRUNCATED]"
+
+    def _compact_value(
+        self,
+        value: Any,
+        max_chars: int,
+    ) -> Any:
+        """
+        Compact nested values for prompt construction.
+        """
+
+        if isinstance(value, str):
+            return self._truncate_text(
+                value,
+                max_chars,
+            )
+
+        try:
+            serialized = json.dumps(
+                value,
+                ensure_ascii=False,
+            )
+
+            if len(serialized) <= max_chars:
+                return value
+
+            return (
+                serialized[:max_chars]
+                + "\n[TRUNCATED]"
+            )
+
+        except Exception:
+            return str(value)[:max_chars]
+
+    def _compact_policy(
+        self,
+        policy: dict,
+    ) -> dict:
+        """
+        Reduce structured policy size.
+        """
+
+        compact = {}
+
+        preferred_keys = (
+            "policy_id",
+            "id",
+            "title",
+            "name",
+            "section",
+            "description",
+            "content",
+            "text",
+            "rule",
+            "approval_required",
+        )
+
+        for key in preferred_keys:
+            if key in policy:
+                compact[key] = self._compact_value(
+                    policy[key],
+                    self.max_policy_chars,
+                )
+
+        if not compact:
+            for key, value in list(policy.items())[:10]:
+                compact[key] = self._compact_value(
+                    value,
+                    self.max_policy_chars,
+                )
+
+        return compact
+
+    def _compact_policies(
+        self,
+        policies: list[dict],
+    ) -> list[dict]:
+        return [
+            self._compact_policy(policy)
+            for policy in (
+                policies or []
+            )[:self.max_structured_policies]
+            if isinstance(policy, dict)
+        ]
+
+    def _compact_chunk(
+        self,
+        chunk: dict,
+    ) -> dict:
+        """
+        Preserve source metadata and relevant policy text.
+        """
+
+        compact = {}
+
+        metadata_keys = (
+            "document",
+            "policy_id",
+            "section",
+            "chunk_id",
+            "title",
+            "page",
+            "score",
+        )
+
+        for key in metadata_keys:
+            if key in chunk:
+                compact[key] = chunk[key]
+
+        text_keys = (
+            "content",
+            "text",
+            "page_content",
+            "chunk",
+            "body",
+        )
+
+        found_text = False
+
+        for key in text_keys:
+            if (
+                key in chunk
+                and chunk[key] is not None
+            ):
+                compact[key] = self._compact_value(
+                    chunk[key],
+                    self.max_chunk_chars,
+                )
+
+                found_text = True
+                break
+
+        if not found_text:
+            for key, value in chunk.items():
+                if key not in compact:
+                    compact[key] = self._compact_value(
+                        value,
+                        self.max_chunk_chars,
+                    )
+
+        return compact
+
+    def _compact_chunks(
+        self,
+        retrieved_chunks: list[dict],
+    ) -> list[dict]:
+        return [
+            self._compact_chunk(chunk)
+            for chunk in (
+                retrieved_chunks or []
+            )[:self.max_retrieved_chunks]
+            if isinstance(chunk, dict)
+        ]
+
+    def _compact_resource(
+        self,
+        resource: dict,
+    ) -> dict:
+        """
+        Reduce resource payload size.
+        """
+
+        compact = {}
+
+        preferred_keys = (
+            "id",
+            "name",
+            "code",
+            "type",
+            "category",
+            "location",
+            "description",
+            "capacity",
+            "available",
+            "status",
+        )
+
+        for key in preferred_keys:
+            if key in resource:
+                compact[key] = self._compact_value(
+                    resource[key],
+                    self.max_resource_chars,
+                )
+
+        if not compact:
+            for key, value in list(resource.items())[:10]:
+                compact[key] = self._compact_value(
+                    value,
+                    self.max_resource_chars,
+                )
+
+        return compact
+
+    def _compact_resources(
+        self,
+        resources: list[dict],
+    ) -> list[dict]:
+        return [
+            self._compact_resource(resource)
+            for resource in (
+                resources or []
+            )[:self.max_resources]
+            if isinstance(resource, dict)
+        ]
+
+    def _normalize_result(
+        self,
+        result: dict[str, Any],
+    ) -> None:
+        """
+        Normalize missing or malformed top-level fields.
+        """
+
+        defaults = {
+            "intent": "UNKNOWN",
+            "confidence_score": 0.0,
+            "uncertainty_detected": False,
+            "policy_conflict_detected": False,
+            "requires_approval": False,
+            "decision": "ALLOW",
+            "proposed_action": None,
+            "sources": [],
+            "reason": "",
+            "assistant_message": "",
+        }
+
+        for key, value in defaults.items():
+            result.setdefault(key, value)
+
+        if result["intent"] not in self.VALID_INTENTS:
+            result["intent"] = "UNKNOWN"
+
+        try:
+            result["confidence_score"] = float(
+                result["confidence_score"]
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            result["confidence_score"] = 0.0
+
+        result["confidence_score"] = max(
+            0.0,
+            min(
+                result["confidence_score"],
+                1.0,
+            ),
+        )
+
+        result["uncertainty_detected"] = bool(
+            result["uncertainty_detected"]
+        )
+
+        result["policy_conflict_detected"] = bool(
+            result["policy_conflict_detected"]
+        )
+
+        result["requires_approval"] = bool(
+            result["requires_approval"]
+        )
+
+        if result["decision"] not in self.VALID_DECISIONS:
+            result["decision"] = (
+                "REQUIRE_HUMAN_APPROVAL"
+            )
+
+        if not isinstance(
+            result["sources"],
+            list,
+        ):
+            result["sources"] = []
+
+        if not isinstance(
+            result["reason"],
+            str,
+        ):
+            result["reason"] = str(
+                result["reason"]
+            )
+
+        if not isinstance(
+            result["assistant_message"],
+            str,
+        ):
+            result["assistant_message"] = str(
+                result["assistant_message"]
+            )
+
+    def _force_clarification(
+        self,
+        result: dict[str, Any],
+        reason: str,
+        assistant_message: str,
+    ) -> dict[str, Any]:
+        """
+        Convert an unsafe or incomplete proposed action into a
+        clarification-required response.
+
+        This is not an authorization decision.
+
+        It simply prevents fabricated or malformed tool execution.
+        """
+
+        result["uncertainty_detected"] = True
+        result["proposed_action"] = None
+        result["reason"] = reason
+        result["assistant_message"] = assistant_message
+
+        if result["decision"] == "ALLOW":
+            result["decision"] = (
+                "REQUIRE_HUMAN_APPROVAL"
+            )
+
+        return result
+
+    def _validate_sources(
+        self,
+        sources: Any,
+        retrieved_chunks: list[dict],
+    ) -> list[dict]:
+        """
+        Keep only sources that can be matched to actual retrieved evidence.
+
+        This prevents the LLM from inventing policy citations.
+        """
+
+        if not isinstance(
+            sources,
+            list,
+        ):
+            return []
+
+        valid_source_keys = set()
+
+        for chunk in retrieved_chunks or []:
+            if not isinstance(
+                chunk,
+                dict,
+            ):
+                continue
+
+            key = (
+                str(
+                    chunk.get(
+                        "document",
+                        "unknown",
+                    )
+                ),
+                str(
+                    chunk.get(
+                        "policy_id",
+                        "unknown",
+                    )
+                ),
+                str(
+                    chunk.get(
+                        "section",
+                        "unknown",
+                    )
+                ),
+                str(
+                    chunk.get(
+                        "chunk_id",
+                        "unknown",
+                    )
+                ),
+            )
+
+            valid_source_keys.add(key)
+
+        validated = []
+
+        for source in sources:
+            if not isinstance(
+                source,
+                dict,
+            ):
+                continue
+
+            normalized = {
+                "document": str(
+                    source.get(
+                        "document",
+                        "unknown",
+                    )
+                ),
+                "policy_id": str(
+                    source.get(
+                        "policy_id",
+                        "unknown",
+                    )
+                ),
+                "section": str(
+                    source.get(
+                        "section",
+                        "unknown",
+                    )
+                ),
+                "chunk_id": str(
+                    source.get(
+                        "chunk_id",
+                        "unknown",
+                    )
+                ),
+            }
+
+            key = (
+                normalized["document"],
+                normalized["policy_id"],
+                normalized["section"],
+                normalized["chunk_id"],
+            )
+
+            if key in valid_source_keys:
+                validated.append(
+                    normalized
+                )
+
+        return validated
+
+    def _validate_action(
+        self,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Deterministically validate proposed tool actions.
+
+        This validates structure and required arguments.
+
+        It does NOT determine user permissions.
+
+        Backend authorization remains responsible for permission checks.
+        """
+
+        action = result.get(
+            "proposed_action"
+        )
+
+        if action is None:
+            return result
+
+        if not isinstance(
+            action,
+            dict,
+        ):
+            return self._force_clarification(
+                result=result,
+                reason=(
+                    "The proposed institutional action "
+                    "was not structurally valid."
+                ),
+                assistant_message=(
+                    "I could not reliably interpret the "
+                    "requested action. Please clarify "
+                    "your request."
+                ),
+            )
+
+        tool = action.get("tool")
+        operation = action.get(
+            "operation"
+        )
+        arguments = action.get(
+            "arguments"
+        )
+
+        if tool not in self.TOOL_SCHEMAS:
+            return self._force_clarification(
+                result=result,
+                reason=(
+                    "The reasoning result proposed an "
+                    "unsupported tool."
+                ),
+                assistant_message=(
+                    "I could not safely determine how to "
+                    "process this request."
+                ),
+            )
+
+        expected_operation = (
+            self.TOOL_SCHEMAS[tool]
+            ["operation"]
+        )
+
+        if operation != expected_operation:
+            return self._force_clarification(
+                result=result,
+                reason=(
+                    "The proposed tool operation was invalid."
+                ),
+                assistant_message=(
+                    "I could not safely validate the requested "
+                    "institutional operation."
+                ),
+            )
+
+        if not isinstance(
+            arguments,
+            dict,
+        ):
+            return self._force_clarification(
+                result=result,
+                reason=(
+                    "The proposed action arguments "
+                    "were invalid."
+                ),
+                assistant_message=(
+                    "I need clearer information before "
+                    "this request can be processed."
+                ),
+            )
+
+        required = (
+            self.TOOL_SCHEMAS[tool]
+            ["required"]
+        )
+
+        missing = [
+            field
+            for field in required
+            if not arguments.get(field)
+        ]
+
+        if missing:
+            return self._force_clarification(
+                result=result,
+                reason=(
+                    "Required action information is missing: "
+                    + ", ".join(missing)
+                ),
+                assistant_message=(
+                    "I need the following information before "
+                    "I can prepare this request: "
+                    + ", ".join(missing)
+                ),
+            )
+
+        if tool == "MaintenanceTicketTool":
+
+            category = str(
+                arguments.get(
+                    "category",
+                    "",
+                )
+            ).upper()
+
+            if (
+                category
+                not in self.VALID_MAINTENANCE_CATEGORIES
+            ):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "The maintenance category could not "
+                        "be safely validated."
+                    ),
+                    assistant_message=(
+                        "I could not determine a valid "
+                        "maintenance category for this request."
+                    ),
+                )
+
+            arguments["category"] = category
+
+            urgency = arguments.get(
+                "urgency"
+            )
+
+            if urgency is not None:
+                urgency = str(
+                    urgency
+                ).upper()
+
+                if (
+                    urgency
+                    not in self.VALID_URGENCY_LEVELS
+                ):
+                    return self._force_clarification(
+                        result=result,
+                        reason=(
+                            "The maintenance urgency could not "
+                            "be safely validated."
+                        ),
+                        assistant_message=(
+                            "I could not determine a valid "
+                            "urgency level for this request."
+                        ),
+                    )
+
+                arguments["urgency"] = urgency
+
+        elif tool == "LabBookingTool":
+
+            if not self._is_valid_date(
+                arguments.get("date")
+            ):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "The booking date was not in the "
+                        "required YYYY-MM-DD format."
+                    ),
+                    assistant_message=(
+                        "Please provide the booking date in "
+                        "YYYY-MM-DD format."
+                    ),
+                )
+
+            if not self._is_valid_time(
+                arguments.get("start")
+            ):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "The booking start time was invalid."
+                    ),
+                    assistant_message=(
+                        "Please provide the booking start time "
+                        "in HH:MM format."
+                    ),
+                )
+
+            if not self._is_valid_time(
+                arguments.get("end")
+            ):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "The booking end time was invalid."
+                    ),
+                    assistant_message=(
+                        "Please provide the booking end time "
+                        "in HH:MM format."
+                    ),
+                )
+
+            start_minutes = (
+                self._time_to_minutes(
+                    arguments["start"]
+                )
+            )
+
+            end_minutes = (
+                self._time_to_minutes(
+                    arguments["end"]
+                )
+            )
+
+            if (
+                end_minutes
+                <= start_minutes
+            ):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "The booking end time must be after "
+                        "the start time."
+                    ),
+                    assistant_message=(
+                        "The booking end time must be later "
+                        "than the start time."
+                    ),
+                )
+
+        elif tool == "StudentInfoTool":
+
+            allowed_args = {"studentId"}
+            if any(k not in allowed_args for k in arguments.keys()):
+                return self._force_clarification(
+                    result=result,
+                    reason=(
+                        "Student profile retrieval does not "
+                        "accept arbitrary arguments other than studentId."
+                    ),
+                    assistant_message=(
+                        "I could not safely validate the "
+                        "student information request."
+                    ),
+                )
+
+        action["arguments"] = arguments
+        result["proposed_action"] = action
+
+        return result
+
+    def _is_valid_date(
+        self,
+        value: Any,
+    ) -> bool:
+        """
+        Validate YYYY-MM-DD structure.
+
+        Calendar validity beyond structure can still be handled
+        downstream if needed.
+        """
+
+        if not isinstance(
+            value,
+            str,
+        ):
+            return False
+
+        parts = value.split("-")
+
+        if len(parts) != 3:
+            return False
+
+        year, month, day = parts
+
+        if (
+            len(year) != 4
+            or len(month) != 2
+            or len(day) != 2
+        ):
+            return False
+
+        try:
+            year_value = int(year)
+            month_value = int(month)
+            day_value = int(day)
+
+            if year_value < 1:
+                return False
+
+            if not (
+                1 <= month_value <= 12
+            ):
+                return False
+
+            if not (
+                1 <= day_value <= 31
+            ):
+                return False
+
+            return True
+
+        except ValueError:
+            return False
+
+    def _is_valid_time(
+        self,
+        value: Any,
+    ) -> bool:
+        if not isinstance(
+            value,
+            str,
+        ):
+            return False
+
+        parts = value.split(":")
+
+        if len(parts) != 2:
+            return False
+
+        try:
+            hour, minute = map(
+                int,
+                parts,
+            )
+
+            return (
+                0 <= hour <= 23
+                and 0 <= minute <= 59
+            )
+
+        except ValueError:
+            return False
+
+    def _time_to_minutes(
+        self,
+        value: str,
+    ) -> int:
+        hour, minute = map(
+            int,
+            value.split(":"),
+        )
+
+        return (
+            hour * 60
+            + minute
+        )
 
     def _apply_policy_guardrails(
         self,
@@ -181,65 +1612,211 @@ Return ONLY valid JSON matching this schema:
         retrieved_chunks: list[dict],
     ) -> dict[str, Any]:
         """
-        Deterministic policy enforcement validating LLM reasoning against retrieved policy evidence.
+        Apply deterministic safety and structural validation.
+
+        Important architecture:
+
+        This method DOES NOT make backend authorization decisions.
+
+        It only:
+
+        1. Normalizes LLM output.
+        2. Prevents invented or unsupported tools.
+        3. Prevents malformed arguments.
+        4. Validates source references.
+        5. Preserves explicit policy-based escalation or rejection.
         """
-        has_verified_policy = bool(retrieved_chunks and len(retrieved_chunks) > 0)
 
-        if not has_verified_policy:
-            result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-            result["requires_approval"] = True
-            result["uncertainty_detected"] = True
-            result["proposed_action"] = None
-            result["reason"] = (
-                "Insufficient institutional policy evidence retrieved to authorize autonomous execution. "
-                "Routed to human administration for review."
+        print(
+            "\n[LLMService] Applying deterministic guardrails."
+        )
+
+        print(
+            "[LLMService] Result BEFORE guardrails:\n"
+            + json.dumps(
+                result,
+                indent=2,
             )
-            return result
+        )
 
-        if result.get("uncertainty_detected") or not result.get("proposed_action"):
-            if result.get("intent") in ["MAINTENANCE_REQUEST", "LABORATORY_BOOKING", "UNKNOWN"] or not result.get("proposed_action"):
-                # If no proposed action and request mentions consequential tasks or ungrounded facility operations
-                is_policy_inquiry = result.get("intent") == "POLICY_INQUIRY" and not any(
-                    w in str(result.get("reason", "")).lower() for w in ["overhaul", "nuclear", "propulsion", "experimental", "facility"]
+        self._normalize_result(
+            result
+        )
+
+        result["sources"] = (
+            self._validate_sources(
+                sources=result.get(
+                    "sources"
+                ),
+                retrieved_chunks=retrieved_chunks,
+            )
+        )
+
+        result = self._validate_action(
+            result
+        )
+
+        action = result.get(
+            "proposed_action"
+        )
+
+        intent = result.get(
+            "intent"
+        )
+
+        if (
+            intent
+            in {
+                "GENERAL_QUERY",
+                "POLICY_INQUIRY",
+            }
+            and action is None
+        ):
+            result["requires_approval"] = False
+
+            if (
+                result["decision"]
+                == "REQUIRE_HUMAN_APPROVAL"
+                and not result[
+                    "policy_conflict_detected"
+                ]
+            ):
+                result["decision"] = "ALLOW"
+
+        if (
+            intent == "STUDENT_INFORMATION"
+            and action
+            and action.get("tool")
+            == "StudentInfoTool"
+        ):
+            if (
+                result["decision"]
+                == "REQUIRE_HUMAN_APPROVAL"
+                and not result[
+                    "requires_approval"
+                ]
+            ):
+                result["decision"] = "ALLOW"
+
+        if result["decision"] == "REJECT":
+            result["requires_approval"] = False
+
+            if not result.get(
+                "assistant_message"
+            ):
+                result["assistant_message"] = (
+                    "This request cannot be processed under "
+                    "the applicable institutional policy."
                 )
-                if not is_policy_inquiry:
-                    result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-                    result["requires_approval"] = True
-                    result["proposed_action"] = None
-                    result["uncertainty_detected"] = True
-            return result
 
-        tool = result["proposed_action"].get("tool")
-        args = result["proposed_action"].get("arguments", {})
+        elif (
+            result["decision"]
+            == "REQUIRE_HUMAN_APPROVAL"
+        ):
+            result["requires_approval"] = True
 
-        if tool == "MaintenanceTicketTool":
-            urgency = str(args.get("urgency", "MEDIUM")).upper()
-            if urgency in ["HIGH", "EMERGENCY"]:
-                result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-                result["requires_approval"] = True
-            else:
-                policy_mandates_approval = any(
-                    bool(p.get("approval_required") or p.get("requires_approval"))
-                    for p in policies
+        elif (
+            result["decision"]
+            == "ALLOW"
+        ):
+            result["requires_approval"] = False
+
+        if not result.get(
+            "assistant_message"
+        ):
+            print(
+                "[LLMService] Warning: LLM omitted assistant_message. "
+                "Generating a deterministic state-aware fallback."
+            )
+
+            result["assistant_message"] = (
+                self._build_state_aware_assistant_message(
+                    result
                 )
-                if policy_mandates_approval:
-                    result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-                    result["requires_approval"] = True
-                    result["proposed_action"]["arguments"]["urgency"] = "HIGH"
-                else:
-                    result["decision"] = "ALLOW"
-                    result["requires_approval"] = False
+            )
 
-        elif tool == "LabBookingTool":
-            start_str = str(args.get("start", "14:00"))
-            end_str = str(args.get("end", "16:00"))
-            start_h = int(start_str.split(":")[0]) if ":" in start_str else 14
-            end_h = int(end_str.split(":")[0]) if ":" in end_str else 16
-            duration = max(0, end_h - start_h)
-            is_extended = duration > 2 or start_h >= 18 or start_h < 8
-            if is_extended:
-                result["decision"] = "REQUIRE_HUMAN_APPROVAL"
-                result["requires_approval"] = True
+        print(
+            "[LLMService] Important: "
+            "backend authorization remains authoritative "
+            "for execution permissions."
+        )
+
+        return self._log_guardrail_result(
+            result
+        )
+
+    def _build_state_aware_assistant_message(
+        self,
+        result: dict[str, Any],
+    ) -> str:
+        """
+        Build a deterministic user-facing fallback when the LLM omitted
+        assistant_message.
+
+        This does not authorize or execute an action. It only reflects the
+        already validated reasoning state.
+        """
+
+        decision = result.get(
+            "decision"
+        )
+
+        action = result.get(
+            "proposed_action"
+        )
+
+        if decision == "REJECT":
+            return (
+                "This request cannot be processed under the applicable "
+                "institutional policy."
+            )
+
+        if decision == "REQUIRE_HUMAN_APPROVAL":
+            if action is not None:
+                return (
+                    "Your request requires institutional review or approval "
+                    "before it can proceed. The requested action has not yet "
+                    "been executed."
+                )
+
+            return (
+                "Your request requires institutional review or approval "
+                "before it can proceed."
+            )
+
+        if result.get(
+            "uncertainty_detected"
+        ):
+            return (
+                "I need additional clarification before this request can be "
+                "processed."
+            )
+
+        if decision == "ALLOW":
+            if action is not None:
+                return (
+                    "Your request has been understood and can proceed to "
+                    "backend authorization. It has not yet been executed."
+                )
+
+            return "Your request has been processed."
+
+        return (
+            "Your request has been received and requires further processing."
+        )
+
+    def _log_guardrail_result(
+        self,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        print(
+            "[LLMService] Result AFTER guardrails:\n"
+            + json.dumps(
+                result,
+                indent=2,
+            )
+        )
 
         return result
 
@@ -252,420 +1829,364 @@ Return ONLY valid JSON matching this schema:
         resources: list[dict],
         retrieved_chunks: list[dict],
     ) -> dict[str, Any] | None:
-        user_prompt = f"""
-USER PROFILE:
-ID: {request.user.id}
-Role: {request.user.role}
-Department: {request.user.department or "N/A"}
-Year: {request.user.year or "N/A"}
+        """
+        Call Groq first and OpenAI second.
+        """
 
-CURRENT USER MESSAGE:
-{request.message}
+        limited_conversation_context = (
+            self._truncate_text(
+                conversation_context or "",
+                self.max_conversation_chars,
+            )
+        )
 
-CONVERSATION HISTORY:
-{conversation_context or "No previous conversation."}
+        limited_policy_context = (
+            self._truncate_text(
+                policy_context or "",
+                self.max_policy_context_chars,
+            )
+        )
 
-STRUCTURED RELEVANT POLICIES:
-{json.dumps(policies, indent=2)}
+        limited_policies = (
+            self._compact_policies(
+                policies or [],
+            )
+        )
 
-RETRIEVED POLICY CONTEXT:
-{policy_context}
+        limited_chunks = (
+            self._compact_chunks(
+                retrieved_chunks or [],
+            )
+        )
 
-AVAILABLE RESOURCES:
-{json.dumps(resources, indent=2)}
+        limited_resources = (
+            self._compact_resources(
+                resources or [],
+            )
+        )
 
-AVAILABLE TOOLS:
-1. LabBookingTool
-   Operation: book(resource, date, start, end, purpose)
+        print(
+            "\n[LLMService] Prompt context after compaction:"
+        )
 
-2. MaintenanceTicketTool
-   Operation: create(location, category, description, urgency)
+        print(
+            "[LLMService] Conversation chars: "
+            f"{len(limited_conversation_context)}"
+        )
 
-3. StudentInfoTool
-   Operation: getProfile(studentId)
+        print(
+            "[LLMService] Policy context chars: "
+            f"{len(limited_policy_context)}"
+        )
 
-Return ONLY valid JSON matching the required schema.
-""".strip()
+        print(
+            "[LLMService] Structured policies sent: "
+            f"0 / not injected (parsed: {len(limited_policies)})"
+        )
 
-        messages = [
-            {"role": "system", "content": self._build_system_prompt()},
-            {"role": "user", "content": user_prompt},
+        print(
+            "[LLMService] Retrieved chunks sent: "
+            f"0 / not injected (raw: {len(limited_chunks)})"
+        )
+
+        print(
+            "[LLMService] Resources sent: "
+            f"{len(limited_resources)}"
+        )
+
+        prompt_sections = [
+            (
+                "AUTHENTICATED USER PROFILE:\n"
+                f"ID: {request.user.id}\n"
+                f"Role: {request.user.role}\n"
+                f"Department: "
+                f"{request.user.department or 'N/A'}\n"
+                f"Year: "
+                f"{request.user.year or 'N/A'}"
+            ),
+            (
+                "CURRENT USER MESSAGE:\n"
+                f"{request.message}"
+            ),
         ]
 
-        if self.groq_api_key:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.groq_api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": messages,
-                    "temperature": 0.0,
-                    "response_format": {"type": "json_object"},
-                }
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        raw_content = data["choices"][0]["message"]["content"]
-                        parsed = json.loads(raw_content)
-                        return self._apply_policy_guardrails(
-                            parsed,
-                            policies=policies,
-                            retrieved_chunks=retrieved_chunks,
-                        )
-            except Exception as e:
-                print(f"[LLMService] Groq call failed: {e}")
+        if limited_conversation_context:
+            prompt_sections.append(
+                "CONVERSATION HISTORY:\n"
+                f"{limited_conversation_context}"
+            )
 
-        if self.openai_api_key:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.openai_api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": "gpt-4o",
-                    "messages": messages,
-                    "temperature": 0.0,
-                    "response_format": {"type": "json_object"},
-                }
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.post(
-                        "https://api.openai.com/v1/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        raw_content = data["choices"][0]["message"]["content"]
-                        parsed = json.loads(raw_content)
-                        return self._apply_policy_guardrails(
-                            parsed,
-                            policies=policies,
-                            retrieved_chunks=retrieved_chunks,
-                        )
-            except Exception as e:
-                print(f"[LLMService] OpenAI call failed: {e}")
+        if limited_policy_context:
+            prompt_sections.append(
+                "RETRIEVED POLICY CONTEXT:\n"
+                f"{limited_policy_context}"
+            )
+
+        if limited_resources:
+            prompt_sections.append(
+                "AVAILABLE RESOURCES:\n"
+                + json.dumps(
+                    limited_resources,
+                    ensure_ascii=False,
+                )
+            )
+
+        prompt_sections.append(
+            """
+Analyze the CURRENT USER MESSAGE.
+
+Authority rules:
+
+- Retrieved policy evidence determines rules explicitly stated in policy.
+- Do not invent policy rules when retrieved evidence is silent.
+- Backend authorization is authoritative for user permissions and access.
+- You may propose a complete action when policy does not prohibit or
+  require approval, but the backend will decide whether execution is
+  authorized.
+- Do not claim successful execution.
+
+Conversation history may be used to resolve references and preserve
+previously supplied action arguments only when the CURRENT USER MESSAGE clearly
+continues, confirms, accepts, or modifies the same action.
+
+The CURRENT USER MESSAGE takes precedence over conflicting historical values.
+
+Do not invent missing action arguments or reuse historical arguments for a new
+or unrelated action.
+
+Return only valid JSON matching the required schema.
+""".strip()
+        )
+
+        user_prompt = "\n\n".join(
+            prompt_sections
+        )
+
+        print(
+            "[LLMService] Final user prompt chars: "
+            f"{len(user_prompt)}"
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": self._build_system_prompt(),
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ]
+
+        groq_result = self._call_provider(
+            provider_name="GROQ",
+            api_key=self.groq_api_key,
+            url=(
+                "https://api.groq.com/"
+                "openai/v1/chat/completions"
+            ),
+            model=self.groq_model,
+            messages=messages,
+        )
+
+        if groq_result is not None:
+            return self._apply_policy_guardrails(
+                result=groq_result,
+                policies=policies,
+                retrieved_chunks=retrieved_chunks,
+            )
+
+        openai_result = self._call_provider(
+            provider_name="OPENAI",
+            api_key=self.openai_api_key,
+            url=(
+                "https://api.openai.com/"
+                "v1/chat/completions"
+            ),
+            model=self.openai_model,
+            messages=messages,
+        )
+
+        if openai_result is not None:
+            return self._apply_policy_guardrails(
+                result=openai_result,
+                policies=policies,
+                retrieved_chunks=retrieved_chunks,
+            )
 
         return None
 
-    def _deterministic_reason(
+    def _call_provider(
         self,
-        request: AgentReasonRequest,
-        policies: list[dict] = None,
-        retrieved_chunks: list[dict] = None,
-        resources: list[dict] = None,
-    ) -> dict[str, Any]:
+        provider_name: str,
+        api_key: str | None,
+        url: str,
+        model: str,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         """
-        Deterministic fallback reasoning when offline or when LLM provider is unavailable.
-        Ensures consistent, safe decision-making across all test suites.
+        Generic OpenAI-compatible provider call.
         """
-        msg = request.message.lower().strip()
-        history_msgs = " ".join([c.content.lower() for c in request.conversation])
-        full_text = f"{history_msgs} {msg}".strip()
 
-        # 1. Maintenance Request Detection
-        is_maintenance = any(
-            w in full_text
-            for w in [
-                "maintenance",
-                "kharab",
-                "not working",
-                "broken",
-                "leak",
-                "leaking",
-                "repair",
-                "fix",
-                "spark",
-                "sparks",
-                "sparking",
-                "short circuit",
-                "live wire",
-                "exposed wire",
-                "switchboard",
-                "flood",
-                "flooding",
-                "burst",
-                "gas leak",
-                "fused",
-                "damaged",
-                "damage",
-                "crack",
-                "cracks",
-                "hazard",
-                "dangerous",
-                "cooling",
-                "heating",
-                "plumbing",
-                "electrical",
-                "hvac",
-                "civil",
-                "projector",
-                "light",
-                "fan",
-                "ac",
-            ]
+        if not api_key:
+            print(
+                f"[LLMService] "
+                f"{provider_name} API key not configured."
+            )
+
+            return None
+
+        print(
+            f"\n[LLMService] Calling "
+            f"{provider_name}..."
         )
 
-        if is_maintenance:
-            # Policy-grounded urgency resolution
-            has_high_policy = any(
-                p.get("approval_required")
-                or "emergency" in str(p.get("rule", "")).lower()
-                or "safety" in str(p.get("rule", "")).lower()
-                or "high" in str(p.get("rule", "")).lower()
-                for p in (policies or [])
-            )
+        print(
+            "[LLMService] Model: "
+            f"{model}"
+        )
 
-            has_high_risk_words = any(
-                w in full_text
-                for w in [
-                    "spark",
-                    "sparks",
-                    "sparking",
-                    "short circuit",
-                    "live wire",
-                    "exposed wire",
-                    "fire",
-                    "flood",
-                    "burst",
-                    "gas leak",
-                    "severe",
-                    "urgent",
-                    "emergency",
-                    "danger",
-                    "hazard",
-                    "robotic arm",
-                ]
-            )
-
-            if any(w in full_text for w in ["emergency", "sparking", "fire", "flood", "gas leak"]):
-                urgency = "EMERGENCY"
-            elif has_high_risk_words or has_high_policy:
-                urgency = "HIGH"
-            elif any(w in full_text for w in ["chair", "furniture", "routine", "minor", "low risk", "low"]):
-                urgency = "LOW"
-            else:
-                urgency = "MEDIUM"
-
-            category = "GENERAL"
-            if any(w in full_text for w in ["ac", "cooling", "heating", "hvac", "temperature", "ventilation"]):
-                category = "HVAC"
-            elif any(w in full_text for w in ["spark", "wire", "switchboard", "light", "fan", "electrical", "short circuit", "panel"]):
-                category = "ELECTRICAL"
-            elif any(w in full_text for w in ["pipe", "leak", "tap", "water", "plumbing", "drain"]):
-                category = "PLUMBING"
-            elif any(w in full_text for w in ["robot", "arm", "fume hood", "microscope", "equipment", "lab equipment", "oscilloscope"]):
-                category = "LAB_EQUIPMENT"
-            elif any(w in full_text for w in ["wall", "door", "window", "floor", "ceiling", "civil", "chair", "furniture"]):
-                category = "CIVIL"
-            elif any(w in full_text for w in ["wifi", "router", "lan", "network", "server", "pc", "computer", "projector"]):
-                category = "IT"
-
-            location = "General Campus Facility"
-            if "robotics" in full_text:
-                location = "Robotics Lab"
-            elif "lab 304" in full_text or "304" in full_text:
-                location = "Lab 304"
-            elif "physics" in full_text:
-                location = "Physics Lab"
-            elif "chemistry" in full_text:
-                location = "Chemistry Lab"
-            elif "hostel" in full_text:
-                location = "Hostel Block B"
-
-            # Ambiguous maintenance with no location/category detail or ungrounded experimental requests
-            if (
-                any(w in full_text for w in ["nuclear", "propulsion", "overhaul", "fix it maintenance.", "fix it", "maintenance please"])
-                or category == "GENERAL"
-            ):
-                return {
-                    "intent": "MAINTENANCE_REQUEST",
-                    "confidence_score": 0.5,
-                    "uncertainty_detected": True,
-                    "policy_conflict_detected": False,
-                    "requires_approval": True,
-                    "decision": "REQUIRE_HUMAN_APPROVAL",
-                    "proposed_action": None,
-                    "sources": [],
-                    "reason": "Insufficient institutional policy evidence retrieved to authorize autonomous execution. Routing request for administrative review.",
-                }
-
-            requires_approval = urgency in ["HIGH", "EMERGENCY"]
-            decision = "REQUIRE_HUMAN_APPROVAL" if requires_approval else "ALLOW"
-
-            return {
-                "intent": "MAINTENANCE_REQUEST",
-                "confidence_score": 0.95,
-                "uncertainty_detected": False,
-                "policy_conflict_detected": False,
-                "requires_approval": requires_approval,
-                "decision": decision,
-                "proposed_action": {
-                    "tool": "MaintenanceTicketTool",
-                    "operation": "create",
-                    "arguments": {
-                        "location": location,
-                        "category": category if category != "GENERAL" else "HVAC",
-                        "description": request.message,
-                        "urgency": urgency,
-                    },
-                },
-                "reason": (
-                    "High-priority maintenance issue requires administrative authorization and supervisor review."
-                    if requires_approval
-                    else "Routine maintenance request processed for automated ticket creation and team dispatch."
+        try:
+            headers = {
+                "Authorization": (
+                    f"Bearer {api_key}"
+                ),
+                "Content-Type": (
+                    "application/json"
                 ),
             }
 
-        # 2. Student Info Tool Handling
-        is_student_info = any(
-            w in full_text
-            for w in [
-                "my profile",
-                "my details",
-                "student info",
-                "student profile",
-                "get profile",
-                "my roll",
-                "my gpa",
-                "my cgpa",
-            ]
-        )
-        if is_student_info:
-            return {
-                "intent": "STUDENT_INFORMATION",
-                "confidence_score": 0.95,
-                "uncertainty_detected": False,
-                "policy_conflict_detected": False,
-                "requires_approval": False,
-                "decision": "ALLOW",
-                "proposed_action": {
-                    "tool": "StudentInfoTool",
-                    "operation": "getProfile",
-                    "arguments": {},
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": (
+                    self.max_output_tokens
+                ),
+                "response_format": {
+                    "type": "json_object",
                 },
-                "sources": [],
-                "reason": "Student profile lookup requested.",
             }
 
-        # 3. Policy Inquiry Handling
-        is_inquiry = any(
-            w in full_text
-            for w in [
-                "policy",
-                "rules",
-                "limit",
-                "maximum duration",
-                "what is",
-                "how long",
-                "can i book",
-                "allowed",
-                "guidelines",
-                "who can",
-            ]
-        )
-        if is_inquiry and not any(w in full_text for w in ["book", "reserve", "chahiye", "schedule"]):
-            return {
-                "intent": "POLICY_INQUIRY",
-                "confidence_score": 0.95,
-                "uncertainty_detected": False,
-                "policy_conflict_detected": False,
-                "requires_approval": False,
-                "decision": "ALLOW",
-                "proposed_action": None,
-                "sources": [],
-                "reason": "Standard institutional policy inquiry answered based on handbook guidelines.",
-            }
+            with httpx.Client(
+                timeout=45.0
+            ) as client:
 
-        # 4. Ambiguous or Unsupported Requests
-        is_lab_booking = any(
-            w in full_text
-            for w in [
-                "book",
-                "booking",
-                "reserve",
-                "reservation",
-                "chahiye",
-                "slot",
-                "timing",
-                "robotics lab",
-                "physics lab",
-                "lab",
-            ]
-        )
+                response = client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                )
 
-        if not is_lab_booking:
-            return {
-                "intent": "UNKNOWN",
-                "confidence_score": 0.2,
-                "uncertainty_detected": True,
-                "policy_conflict_detected": False,
-                "requires_approval": True,
-                "decision": "REQUIRE_HUMAN_APPROVAL",
-                "proposed_action": None,
-                "sources": [],
-                "reason": "Request lacks sufficient detail or policy evidence (EXC-001 Policy Exception).",
-            }
+            print(
+                f"[LLMService] "
+                f"{provider_name} status code: "
+                f"{response.status_code}"
+            )
 
-        # 5. Laboratory Booking Handling
-        target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        if "today" in full_text or "aaj" in full_text:
-            target_date = datetime.now().strftime("%Y-%m-%d")
-        elif "2026-" in full_text:
-            date_match = re.search(r"2026-\d{2}-\d{2}", full_text)
-            if date_match:
-                target_date = date_match.group(0)
+            if response.status_code != 200:
 
-        start_time = "14:00"
-        end_time = "16:00"
+                print(
+                    f"[LLMService] "
+                    f"{provider_name} error response:\n"
+                    f"{response.text}"
+                )
 
-        text_without_dates = re.sub(r"2026-\d{2}-\d{2}", "", full_text)
-        time_match = re.search(r"(\d{1,2}(?::\d{2})?)\s*(?:to|-|se)\s*(\d{1,2}(?::\d{2})?)", text_without_dates)
-        if time_match:
-            s_raw, e_raw = time_match.group(1), time_match.group(2)
-            s_val = int(s_raw.split(":")[0])
-            e_val = int(e_raw.split(":")[0])
-            if s_val < 8 and "am" not in text_without_dates:
-                s_val += 12
-            if e_val < 8 and "am" not in text_without_dates:
-                e_val += 12
-            start_time = f"{s_val:02d}:00"
-            end_time = f"{e_val:02d}:00"
+                return None
 
-        is_extended = any(t in full_text for t in ["3 hour", "3 hours", "three hours", "4 hours", "2 to 5", "14:00 to 17:00"])
-        is_after_hours = any(t in full_text for t in ["10 pm", "22:00", "after hours", "night", "late night", "23:00", "10:00 pm"])
-        is_exam = "exam" in full_text or "examination" in full_text
+            data = response.json()
 
-        requires_approval = is_extended or is_after_hours or is_exam
-        decision = "REQUIRE_HUMAN_APPROVAL" if requires_approval else "ALLOW"
+            raw_content = (
+                data["choices"][0]
+                ["message"]["content"]
+            )
+
+            print(
+                f"[LLMService] RAW "
+                f"{provider_name} RESPONSE:\n"
+                + raw_content
+            )
+
+            parsed = json.loads(
+                raw_content
+            )
+
+            if not isinstance(
+                parsed,
+                dict,
+            ):
+                raise ValueError(
+                    "LLM response JSON root "
+                    "must be an object."
+                )
+
+            return parsed
+
+        except Exception as exc:
+
+            print(
+                f"[LLMService] "
+                f"{provider_name} call failed: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return None
+
+    def _safe_fallback(
+        self,
+        request: AgentReasonRequest,
+        retrieved_chunks: list[dict],
+    ) -> dict[str, Any]:
+        """
+        Conservative fallback.
+
+        No action is invented when the reasoning provider is unavailable.
+        """
 
         return {
-            "intent": "LABORATORY_BOOKING",
-            "confidence_score": 0.95,
-            "uncertainty_detected": False,
-            "policy_conflict_detected": is_exam,
-            "requires_approval": requires_approval,
-            "decision": decision,
-            "proposed_action": {
-                "tool": "LabBookingTool",
-                "operation": "book",
-                "arguments": {
-                    "resource": "robotics-lab",
-                    "date": target_date,
-                    "start": start_time,
-                    "end": end_time,
-                    "purpose": "Course lab coursework",
-                },
-            },
+            "intent": "UNKNOWN",
+            "confidence_score": 0.0,
+            "uncertainty_detected": True,
+            "policy_conflict_detected": False,
+            "requires_approval": True,
+            "decision": "REQUIRE_HUMAN_APPROVAL",
+            "proposed_action": None,
+            "sources": [
+                {
+                    "document": chunk.get(
+                        "document",
+                        "unknown",
+                    ),
+                    "policy_id": chunk.get(
+                        "policy_id",
+                        "unknown",
+                    ),
+                    "section": chunk.get(
+                        "section",
+                        "unknown",
+                    ),
+                    "chunk_id": chunk.get(
+                        "chunk_id",
+                        "unknown",
+                    ),
+                }
+                for chunk in (
+                    retrieved_chunks or []
+                )[:5]
+                if isinstance(
+                    chunk,
+                    dict,
+                )
+            ],
             "reason": (
-                "Lab booking requires supervisor review for extended duration or exam periods."
-                if requires_approval
-                else "Standard daytime laboratory booking conforms to institutional guidelines."
+                "The AI reasoning provider was unavailable, "
+                "so the request could not be safely interpreted "
+                "without inventing institutional action details."
+            ),
+            "assistant_message": (
+                "I could not safely interpret this request "
+                "automatically because the AI reasoning service "
+                "is currently unavailable."
             ),
         }

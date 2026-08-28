@@ -1,18 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 
 import { InstitutionalTool } from '../institutional-tools';
 import { ToolExecutionContext } from '../tool-execution-context';
 import { validateToolArguments } from '../tool-argument-validator';
-import { AuditService } from '../../audit/audit.service';
 import { MaintenanceTicketArgsDto } from './dto/maintenance-ticket-args.dto';
 
 @Injectable()
 export class MaintenanceTicketTool extends InstitutionalTool {
   readonly name = 'MaintenanceTicketTool';
-
-  constructor(private readonly auditService: AuditService) {
-    super();
-  }
 
   async execute(
     operation: string,
@@ -30,8 +26,11 @@ export class MaintenanceTicketTool extends InstitutionalTool {
       arguments_,
     );
 
-    const ticketId = `TICK-${Date.now().toString().slice(-6)}`;
+    const ticketId =
+      `TICK-${randomUUID().split('-')[0].toUpperCase()}`;
+
     const urgency = args.urgency || 'MEDIUM';
+
     const slaHours =
       urgency === 'EMERGENCY'
         ? 2
@@ -49,13 +48,18 @@ export class MaintenanceTicketTool extends InstitutionalTool {
       description: args.description,
       urgency,
       slaHours,
-      assignedTeam: `${args.category} Facilities Support Team`,
+      assignedTeam:
+        `${args.category} Facilities Support Team`,
+      requestId: context.requestId,
       createdAt: new Date().toISOString(),
     };
 
     return {
       ticket,
-      message: `Maintenance ticket ${ticketId} created successfully for ${args.location}.`,
+      message:
+        `Maintenance ticket ${ticketId} was created successfully ` +
+        `for ${args.location}. The issue has been assigned to the ` +
+        `${ticket.assignedTeam}.`,
     };
   }
 }

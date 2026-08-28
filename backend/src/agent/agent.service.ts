@@ -3,6 +3,7 @@ import {
   InternalServerErrorException,
   NotFoundException,
   ServiceUnavailableException,
+  HttpException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { HttpService } from '@nestjs/axios';
@@ -19,7 +20,7 @@ import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutionContext } from '../tools/tool-execution-context';
 
 import { AgentReasonRequestDto } from './dto/agent-reason-request.dto';
-import { AgentReasonResponseDto } from './dto/agent-reason-response.dto';
+import { AgentReasonResponseDto, ExecutionErrorDto } from './dto/agent-reason-response.dto';
 
 @Injectable()
 export class AgentService {
@@ -38,6 +39,7 @@ export class AgentService {
       institutionId: string;
       role: string;
     },
+    conversationId?: string,
   ): Promise<AgentReasonResponseDto> {
     /*
      * 1. Resolve the authenticated user.
@@ -64,9 +66,6 @@ export class AgentService {
      *
      * Student context is fetched from our database only when
      * the authenticated user is a STUDENT.
-     *
-     * FACULTY and ADMIN requests do not unnecessarily receive
-     * student-specific context.
      */
     let studentContext: Record<string, unknown> | undefined;
 
@@ -81,15 +80,18 @@ export class AgentService {
         studentContext =
           studentProfile as Record<string, unknown>;
       } catch {
-        // Fallback gracefully if student profile record does not exist
+        /*
+         * Gracefully continue if a student profile does not exist.
+         */
       }
     }
 
     /*
      * 3. Build the trusted request sent to FastAPI.
      *
-     * Identity and institutional context come from NestJS/database,
-     * not from the client.
+     * conversationId is intentionally NOT sent to FastAPI.
+     * It is an internal database relationship belonging to
+     * the NestJS application.
      */
     const aiRequest = {
       request_id: request.request_id,
@@ -110,7 +112,11 @@ export class AgentService {
     /*
      * 4. Create or update the institutional service request.
      *
-     * This makes the endpoint idempotent using request_id.
+     * The request is idempotent using request_id.
+     *
+     * conversationId is stored here so that future events,
+     * such as approval or rejection, can be delivered back
+     * into the correct chat conversation.
      */
     const serviceRequest =
       await this.prisma.serviceRequest.upsert({
@@ -120,11 +126,17 @@ export class AgentService {
         update: {
           message: request.message,
           status: 'PROCESSING',
+          ...(conversationId !== undefined
+            ? {
+              conversationId,
+            }
+            : {}),
         },
         create: {
           externalId: request.request_id,
           institutionId: user.institutionId,
           userId: user.id,
+          conversationId,
           message: request.message,
           status: 'PROCESSING',
         },
@@ -141,6 +153,11 @@ export class AgentService {
         actorId: user.id,
         metadata: {
           externalId: request.request_id,
+          ...(conversationId
+            ? {
+              conversationId,
+            }
+            : {}),
         },
       },
     );
@@ -201,8 +218,9 @@ export class AgentService {
     /*
      * 8. Validate the AI response.
      *
-     * FastAPI is treated as a separate service. NestJS validates
-     * its response before trusting or executing anything from it.
+     * FastAPI is treated as a separate service.
+     * NestJS validates its response before trusting or
+     * executing anything from it.
      */
     const aiResponse = plainToInstance(
       AgentReasonResponseDto,
@@ -409,9 +427,6 @@ export class AgentService {
 
     /*
      * 16. Execute the AI-proposed institutional action.
-     *
-     * The result comes from the trusted institutional tool,
-     * not from the AI model.
      */
     let toolResult: unknown;
 
@@ -423,8 +438,51 @@ export class AgentService {
         context,
       );
     } catch (error) {
+      if (error instanceof HttpException && error.getStatus() < 500) {
+        console.warn(
+          'Expected institutional tool execution failure (4xx):',
+          error.message,
+        );
+
+        await this.prisma.serviceRequest.update({
+          where: {
+            id: serviceRequest.id,
+          },
+          data: {
+            status: 'COMPLETED',
+          },
+        });
+
+        await this.auditService.record(
+          user.institutionId,
+          serviceRequest.id,
+          'ACTION_EXECUTION_FAILED',
+          {
+            metadata: {
+              reason: error.message,
+              status: error.getStatus(),
+            },
+          },
+        );
+
+        aiResponse.execution_result = undefined;
+        const responsePayload = error.getResponse();
+
+        aiResponse.execution_error = {
+          code: error.getStatus(),
+          message: error.message,
+          ...(typeof responsePayload === 'object' && responsePayload !== null
+            ? responsePayload
+            : typeof responsePayload === 'string'
+              ? { message: responsePayload }
+              : {}),
+        } as ExecutionErrorDto;
+
+        return aiResponse;
+      }
+
       console.error(
-        'Institutional tool execution failed:',
+        'Institutional tool execution failed unexpectedly:',
         error,
       );
 
@@ -454,9 +512,6 @@ export class AgentService {
 
     /*
      * 17. Attach the trusted tool result to the response.
-     *
-     * This ensures that data returned to the client comes from
-     * the institutional system, not from the LLM.
      */
     if (
       toolResult !== null &&
@@ -474,7 +529,8 @@ export class AgentService {
     /*
      * 18. Record successful institutional execution.
      */
-    const ticket = (toolResult as Record<string, unknown>)?.ticket;
+    const ticket =
+      (toolResult as Record<string, unknown>)?.ticket;
 
     await this.auditService.record(
       user.institutionId,
@@ -485,7 +541,12 @@ export class AgentService {
         metadata: {
           tool: aiResponse.proposed_action.tool,
           operation: aiResponse.proposed_action.operation,
-          ...(ticket ? { ticket: ticket as Prisma.InputJsonValue } : {}),
+          ...(ticket
+            ? {
+              ticket:
+                ticket as Prisma.InputJsonValue,
+            }
+            : {}),
         },
       },
     );

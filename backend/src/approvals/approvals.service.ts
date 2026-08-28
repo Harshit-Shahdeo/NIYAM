@@ -43,6 +43,7 @@ export class ApprovalsService {
           include: {
             user: true,
             booking: true,
+            conversation: true,
           },
         },
         approver: true,
@@ -62,6 +63,9 @@ export class ApprovalsService {
   ) {
     /*
      * 1. Load the approval and its associated request.
+     *
+     * The request includes the conversation that originally
+     * created this institutional request.
      */
     const approval = await this.prisma.approval.findUnique({
       where: {
@@ -71,6 +75,7 @@ export class ApprovalsService {
         request: {
           include: {
             user: true,
+            conversation: true,
           },
         },
       },
@@ -85,7 +90,7 @@ export class ApprovalsService {
     /*
      * 2. Ensure only ADMIN users can review and approve tickets.
      */
-    if (approverRole && approverRole !== 'ADMIN') {
+    if (approverRole !== 'ADMIN') {
       throw new ForbiddenException(
         'Only ADMIN users have permission to review and approve requests. Students and Faculty are not permitted.',
       );
@@ -94,14 +99,17 @@ export class ApprovalsService {
     /*
      * 3. Ensure the approver belongs to the same institution.
      */
-    if (institutionId && approval.institutionId !== institutionId) {
+    if (
+      institutionId &&
+      approval.institutionId !== institutionId
+    ) {
       throw new ForbiddenException(
         'You do not have permission to review this approval.',
       );
     }
 
     /*
-     * 3. Resolve the approval atomically.
+     * 4. Resolve the approval atomically.
      *
      * Only update if the approval is still PENDING.
      * This prevents duplicate resolution and duplicate
@@ -146,7 +154,7 @@ export class ApprovalsService {
     }
 
     /*
-     * 4. Handle rejection.
+     * 5. Handle rejection.
      *
      * No tool should execute if the approval is rejected.
      */
@@ -174,6 +182,15 @@ export class ApprovalsService {
         },
       });
 
+      await this.sendApprovalMessage(
+        approval.request.conversationId,
+        approval.request.userId,
+        `Your request was reviewed and rejected by the administrator.${dto.notes
+          ? ` Reason: ${dto.notes}`
+          : ''
+        }`,
+      );
+
       return {
         status: 'REJECTED',
         approval: updatedApproval,
@@ -182,7 +199,7 @@ export class ApprovalsService {
     }
 
     /*
-     * 5. Record approval.
+     * 6. Record approval.
      *
      * Approval succeeding does not mean that the
      * requested institutional action has successfully executed.
@@ -202,7 +219,7 @@ export class ApprovalsService {
     });
 
     /*
-     * 6. Find and execute the proposed action.
+     * 7. Find and execute the proposed action.
      */
     let executionResult: unknown;
     let proposedAction: ProposedAction;
@@ -271,11 +288,17 @@ export class ApprovalsService {
         },
       });
 
+      await this.sendApprovalMessage(
+        approval.request.conversationId,
+        approval.request.userId,
+        'Your request was approved, but the requested action could not be completed successfully. Please contact the administrator or try again.',
+      );
+
       throw error;
     }
 
     /*
-     * 7. The institutional tool executed successfully.
+     * 8. The institutional tool executed successfully.
      */
     await this.prisma.serviceRequest.update({
       where: {
@@ -286,7 +309,9 @@ export class ApprovalsService {
       },
     });
 
-    const ticket = (executionResult as Record<string, unknown>)?.ticket;
+    const ticket =
+      (executionResult as Record<string, unknown>)
+        ?.ticket;
 
     await this.auditService.logEvent({
       institutionId: approval.institutionId,
@@ -298,12 +323,29 @@ export class ApprovalsService {
         approvalId: approval.id,
         tool: proposedAction.tool,
         operation: proposedAction.operation,
-        ...(ticket ? { ticket: ticket as Prisma.InputJsonValue } : {}),
+        ...(ticket
+          ? {
+            ticket:
+              ticket as Prisma.InputJsonValue,
+          }
+          : {}),
       },
     });
 
     /*
-     * 8. Return the successful result.
+     * 9. Notify the user in the exact conversation
+     * that created this request.
+     */
+    await this.sendApprovalMessage(
+      approval.request.conversationId,
+      approval.request.userId,
+      this.getSuccessfulExecutionMessage(
+        executionResult,
+      ),
+    );
+
+    /*
+     * 10. Return the successful result.
      */
     return {
       status: 'APPROVED',
@@ -312,6 +354,94 @@ export class ApprovalsService {
       message:
         'Request approved and action successfully executed.',
     };
+  }
+
+  /*
+   * Send an approval/result message to the exact
+   * conversation associated with the ServiceRequest.
+   *
+   * If the request did not originate from chat,
+   * conversationId will be null and we simply skip
+   * the chat notification.
+   */
+  private async sendApprovalMessage(
+    conversationId: string | null,
+    userId: string,
+    content: string,
+  ) {
+    if (!conversationId) {
+      return;
+    }
+
+    const conversation =
+      await this.prisma.conversation.findFirst({
+        where: {
+          id: conversationId,
+          userId,
+        },
+      });
+
+    /*
+     * Do not fail the approval or institutional action
+     * merely because the original conversation no longer
+     * exists.
+     */
+    if (!conversation) {
+      return;
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          role: 'ASSISTANT',
+          content,
+        },
+      }),
+
+      this.prisma.conversation.update({
+        where: {
+          id: conversation.id,
+        },
+        data: {
+          updatedAt: new Date(),
+        },
+      }),
+    ]);
+  }
+
+  /*
+   * Generate a user-facing result from the trusted
+   * institutional tool execution result.
+   *
+   * The LLM does not generate this post-approval
+   * confirmation.
+   */
+  private getSuccessfulExecutionMessage(
+    executionResult: unknown,
+  ): string {
+    if (
+      executionResult &&
+      typeof executionResult === 'object' &&
+      !Array.isArray(executionResult)
+    ) {
+      const result =
+        executionResult as Record<string, unknown>;
+
+      if (typeof result.message === 'string') {
+        return result.message;
+      }
+
+      if (typeof result.ticket === 'string') {
+        return `Your request has been approved and successfully completed. Reference: ${result.ticket}`;
+      }
+    }
+
+    return (
+      'Your request has been approved and the requested action ' +
+      'was successfully completed.'
+    );
   }
 
   private async findProposedAction(
