@@ -259,6 +259,8 @@ export class AgentService {
         'AI reasoning service returned an invalid response',
       );
     }
+    // ADD THIS
+    aiResponse.service_request_id=serviceRequest.id;
 
     /*
      * 9. Record successful AI reasoning.

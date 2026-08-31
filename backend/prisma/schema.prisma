@@ -319,6 +319,7 @@ model Message {
 
   role    MessageRole
   content String
+  metadata Json?
 
   user User @relation(fields: [userId], references: [id])
 

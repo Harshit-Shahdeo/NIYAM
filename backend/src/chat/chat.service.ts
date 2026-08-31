@@ -3,7 +3,7 @@ import {
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
-
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { AuthenticatedUser } from '../auth/types/authenticated-user.interface';
 import { AgentService } from '../agent/agent.service';
@@ -186,6 +186,7 @@ export class ChatService {
                     content: this.getAssistantContent(
                         aiResponse,
                     ),
+                    metadata: JSON.parse(JSON.stringify(aiResponse)) as Prisma.InputJsonValue,
                 },
             });
 

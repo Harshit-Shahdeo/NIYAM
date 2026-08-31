@@ -81,4 +81,8 @@ export class AgentReasonResponseDto {
   @ValidateNested()
   @Type(() => ExecutionErrorDto)
   execution_error?: ExecutionErrorDto;
+
+  @IsOptional()
+  @IsString()
+  service_request_id?:string;
 }
