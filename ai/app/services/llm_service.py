@@ -127,7 +127,7 @@ class LLMService:
 
         self.openai_model = os.getenv(
             "OPENAI_MODEL",
-            "gpt-4o",
+            "openai/gpt-oss-120b",
         )
 
         self.max_conversation_chars = self._get_int_env(
@@ -2000,8 +2000,8 @@ Return only valid JSON matching the required schema.
             provider_name="OPENAI",
             api_key=self.openai_api_key,
             url=(
-                "https://api.openai.com/"
-                "v1/chat/completions"
+                "https://api.groq.com/"
+        "openai/v1/chat/completions"
             ),
             model=self.openai_model,
             messages=messages,

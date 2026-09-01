@@ -32,7 +32,6 @@ export class ApprovalsService {
 
   async listPending(institutionId: string) {
     const where: Prisma.ApprovalWhereInput = {
-      status: 'PENDING',
       institutionId,
     };
 
