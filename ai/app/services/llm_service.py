@@ -56,6 +56,7 @@ class LLMService:
         "LABORATORY_BOOKING",
         "MAINTENANCE_REQUEST",
         "STUDENT_INFORMATION",
+        "SEMESTER_RESULT",
         "GENERAL_QUERY",
         "UNKNOWN",
     }
@@ -87,6 +88,13 @@ class LLMService:
         "StudentInfoTool": {
             "operation": "getProfile",
             "required": set(),
+        },
+        "ERP": {
+            "operation": "GET_SEMESTER_RESULT",
+            "required": {
+                "enrollmentNumber",
+                "semester",
+            },
         },
     }
 
@@ -509,6 +517,7 @@ INTENT TYPES
 - LABORATORY_BOOKING
 - MAINTENANCE_REQUEST
 - STUDENT_INFORMATION
+- SEMESTER_RESULT
 - GENERAL_QUERY
 - UNKNOWN
 
@@ -682,6 +691,29 @@ The backend authorization layer will determine whether the user has
 permission to book the resource.
 
 ============================================================
+SEMESTER RESULT
+============================================================
+
+Only create ERP tool when the CURRENT USER MESSAGE explicitly requests a semester result.
+
+Required:
+- enrollmentNumber (string)
+- semester (positive integer)
+
+Do not invent missing values. If either enrollmentNumber or semester is missing or ambiguous, you must ask the user for it.
+Do not infer the semester from backend identity, user profile, or past conversation.
+Do not invent the result data. The tool retrieves the result.
+The backend authorization layer enforces all access rules.
+
+If required information is missing or ambiguous:
+- uncertainty_detected = true
+- proposed_action = null
+- Provide an assistant_message asking for the specific missing information (e.g. "Please provide your enrollment number.").
+
+Otherwise, when the request is complete:
+- decision = "ALLOW"
+
+============================================================
 AVAILABLE TOOLS
 ============================================================
 
@@ -720,6 +752,17 @@ StudentInfoTool:
   "operation": "getProfile",
   "arguments": {
     "studentId": "string (optional)"
+  }
+}
+
+ERP:
+
+{
+  "tool": "ERP",
+  "operation": "GET_SEMESTER_RESULT",
+  "arguments": {
+    "enrollmentNumber": "string",
+    "semester": "integer"
   }
 }
 
@@ -1501,6 +1544,28 @@ Do not include explanations outside JSON.
                         "I could not safely validate the "
                         "student information request."
                     ),
+                )
+
+        elif tool == "ERP":
+            
+            enrollment_number = arguments.get("enrollmentNumber")
+            if not isinstance(enrollment_number, str) or not enrollment_number.strip():
+                return self._force_clarification(
+                    result=result,
+                    reason="Enrollment number is required and must be a non-empty string.",
+                    assistant_message="Please provide your enrollment number.",
+                )
+            
+            try:
+                semester = int(arguments.get("semester"))
+                if semester <= 0:
+                    raise ValueError
+                arguments["semester"] = semester
+            except (TypeError, ValueError):
+                return self._force_clarification(
+                    result=result,
+                    reason="Semester must be a positive integer.",
+                    assistant_message="Please provide a valid semester number.",
                 )
 
         action["arguments"] = arguments

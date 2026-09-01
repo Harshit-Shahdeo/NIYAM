@@ -242,13 +242,105 @@ async function main() {
             },
         });
 
+    /*
+     * Student 001 Semester Result
+     */
+    const studentOneResult = await prisma.semesterResult.upsert({
+        where: {
+            studentProfileId_semester: {
+                studentProfileId: studentProfile.id,
+                semester: 5,
+            },
+        },
+        update: {
+            sgpa: 8.4,
+        },
+        create: {
+            institutionId: institution.id,
+            studentProfileId: studentProfile.id,
+            semester: 5,
+            sgpa: 8.4,
+        },
+    });
+
+    const studentOneSubjectsData = [
+        { courseCode: 'FMI301', courseName: 'Fundamental Machine Intelligence', credits: 4, marks: 85, grade: 'A' },
+        { courseCode: 'IML302', courseName: 'Introduction to Machine Learning', credits: 4, marks: 82, grade: 'A' },
+        { courseCode: 'CNW303', courseName: 'Computer Networks', credits: 3, marks: 78, grade: 'B+' },
+        { courseCode: 'CPR304', courseName: 'C Programming', credits: 3, marks: 91, grade: 'O' },
+        { courseCode: 'OSY305', courseName: 'Operating System', credits: 4, marks: 75, grade: 'B+' },
+    ];
+
+    for (const subject of studentOneSubjectsData) {
+        await prisma.resultSubject.upsert({
+            where: {
+                semesterResultId_courseCode: {
+                    semesterResultId: studentOneResult.id,
+                    courseCode: subject.courseCode,
+                },
+            },
+            update: subject,
+            create: {
+                ...subject,
+                semesterResultId: studentOneResult.id,
+            },
+        });
+    }
+
+    /*
+     * Student 002 Semester Result
+     */
+    const studentTwoResult = await prisma.semesterResult.upsert({
+        where: {
+            studentProfileId_semester: {
+                studentProfileId: studentTwoProfile.id,
+                semester: 5,
+            },
+        },
+        update: {
+            sgpa: 7.2,
+        },
+        create: {
+            institutionId: institution.id,
+            studentProfileId: studentTwoProfile.id,
+            semester: 5,
+            sgpa: 7.2,
+        },
+    });
+
+    const studentTwoSubjectsData = [
+        { courseCode: 'FMI301', courseName: 'Fundamental Machine Intelligence', credits: 4, marks: 72, grade: 'B' },
+        { courseCode: 'IML302', courseName: 'Introduction to Machine Learning', credits: 4, marks: 68, grade: 'C+' },
+        { courseCode: 'CNW303', courseName: 'Computer Networks', credits: 3, marks: 74, grade: 'B' },
+        { courseCode: 'CPR304', courseName: 'C Programming', credits: 3, marks: 81, grade: 'A' },
+        { courseCode: 'OSY305', courseName: 'Operating System', credits: 4, marks: 65, grade: 'C' },
+    ];
+
+    for (const subject of studentTwoSubjectsData) {
+        await prisma.resultSubject.upsert({
+            where: {
+                semesterResultId_courseCode: {
+                    semesterResultId: studentTwoResult.id,
+                    courseCode: subject.courseCode,
+                },
+            },
+            update: subject,
+            create: {
+                ...subject,
+                semesterResultId: studentTwoResult.id,
+            },
+        });
+    }
+
     console.log({
         institution,
         department,
         student,
         studentProfile,
+        studentOneResult,
         studentTwo,
         studentTwoProfile,
+        studentTwoResult,
         faculty,
         admin,
         resource,

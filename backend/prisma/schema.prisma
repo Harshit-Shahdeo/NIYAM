@@ -83,6 +83,7 @@ model Institution {
   approvals       Approval[]
   auditEvents     AuditEvent[]
   conversations   Conversation[]
+  semesterResults SemesterResult[]
 }
 
 model Department {
@@ -152,6 +153,7 @@ model StudentProfile {
   institution Institution @relation(fields: [institutionId], references: [id])
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   department  Department? @relation(fields: [departmentId], references: [id])
+  semesterResults SemesterResult[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -331,3 +333,41 @@ model Message {
   @@index([conversationId, createdAt])
   @@index([userId])
 }
+
+model SemesterResult {
+  id               String         @id @default(uuid())
+  institutionId    String
+  studentProfileId String
+  semester         Int
+  sgpa             Decimal?       @db.Decimal(4, 2)
+
+  institution      Institution    @relation(fields: [institutionId], references: [id])
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  subjects         ResultSubject[]
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([studentProfileId, semester])
+  @@index([institutionId])
+  @@index([studentProfileId])
+}
+
+model ResultSubject {
+  id               String         @id @default(uuid())
+  semesterResultId String
+  courseCode       String
+  courseName       String
+  credits          Int
+  marks            Int
+  grade            String
+
+  semesterResult   SemesterResult @relation(fields: [semesterResultId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([semesterResultId, courseCode])
+  @@index([semesterResultId])
+}
+

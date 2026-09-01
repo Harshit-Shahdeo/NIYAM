@@ -252,3 +252,50 @@ def test_case_14_no_policy_evidence_consequential():
     assert data["decision"] == "REQUIRE_HUMAN_APPROVAL"
     assert data["uncertainty_detected"] is True
     assert data["proposed_action"] is None
+
+# ERP Case 1: Complete ERP request -> ALLOW
+def test_erp_case_1_complete():
+    payload = {
+        "request_id": "erp-c1",
+        "message": "Show me my semester 5 result. My enrollment number is NIYAM2026001.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["intent"] == "SEMESTER_RESULT"
+    assert data["decision"] == "ALLOW"
+    assert data["proposed_action"] is not None
+    assert data["proposed_action"]["tool"] == "ERP"
+    assert data["proposed_action"]["operation"] == "GET_SEMESTER_RESULT"
+    assert data["proposed_action"]["arguments"]["enrollmentNumber"] == "NIYAM2026001"
+    assert data["proposed_action"]["arguments"]["semester"] == 5
+
+# ERP Case 2: Missing enrollment -> clarification
+def test_erp_case_2_missing_enrollment():
+    payload = {
+        "request_id": "erp-c2",
+        "message": "Show me my semester 5 result.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True
+
+# ERP Case 3: Missing semester -> clarification
+def test_erp_case_3_missing_semester():
+    payload = {
+        "request_id": "erp-c3",
+        "message": "Show me my result. My enrollment number is NIYAM2026001.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True

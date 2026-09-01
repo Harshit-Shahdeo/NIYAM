@@ -11,6 +11,7 @@ import { SchedulingService } from './scheduling/core/scheduling.service';
 import { StudentInfoTool } from './student/student-info.tool';
 
 import { ToolRegistry } from './tool-registry';
+import { ErpTool } from './erp/erp.tool';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ToolRegistry } from './tool-registry';
     LabBookingTool,
     MaintenanceTicketTool,
     StudentInfoTool,
+    ErpTool,
   ],
 
   exports: [
@@ -32,6 +34,7 @@ import { ToolRegistry } from './tool-registry';
     SchedulingService,
     MaintenanceTicketTool,
     StudentInfoTool,
+    ErpTool,
   ],
 })
 export class ToolsModule { }
