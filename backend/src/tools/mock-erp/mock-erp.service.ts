@@ -22,9 +22,14 @@ export class MockErpService {
     institutionId?: string,
   ): Promise<string> {
     const directKey = studentIdOrEnrollment.trim().toUpperCase();
+    const cleanKey = directKey.replace(/[-_\s]/g, '');
 
     if (MOCK_STUDENT_RESULTS[directKey]) {
       return directKey;
+    }
+
+    if (MOCK_STUDENT_RESULTS[cleanKey]) {
+      return cleanKey;
     }
 
     // Try finding in database by user id or enrollmentNumber
@@ -32,7 +37,9 @@ export class MockErpService {
       where: {
         OR: [
           { id: studentIdOrEnrollment },
+          { id: directKey.toLowerCase() },
           { studentProfile: { enrollmentNumber: directKey } },
+          { studentProfile: { enrollmentNumber: cleanKey } },
         ],
         ...(institutionId ? { institutionId } : {}),
       },
@@ -42,26 +49,44 @@ export class MockErpService {
     if (
       student?.studentProfile?.enrollmentNumber &&
       (MOCK_STUDENT_RESULTS[student.studentProfile.enrollmentNumber] ||
-       MOCK_STUDENT_RESULTS[student.studentProfile.enrollmentNumber.replace(/_/g, '')])
+       MOCK_STUDENT_RESULTS[student.studentProfile.enrollmentNumber.replace(/[-_\s]/g, '')])
     ) {
-      return MOCK_STUDENT_RESULTS[student.studentProfile.enrollmentNumber]
-        ? student.studentProfile.enrollmentNumber
-        : student.studentProfile.enrollmentNumber.replace(/_/g, '');
+      const enroll = student.studentProfile.enrollmentNumber;
+      return MOCK_STUDENT_RESULTS[enroll]
+        ? enroll
+        : enroll.replace(/[-_\s]/g, '');
     }
 
-    // Map default student IDs to keys
+    // Map default student IDs to keys (supports both with and without underscore)
     const mapping: Record<string, string> = {
       student_001: 'NIYAM2026001',
+      student001: 'NIYAM2026001',
       NIYAM2026_001: 'NIYAM2026001',
       NIYAM2026001: 'NIYAM2026001',
+
       student_002: 'NIYAM2026002',
+      student002: 'NIYAM2026002',
+      NIYAM2026_002: 'NIYAM2026002',
+      NIYAM2026002: 'NIYAM2026002',
+
       student_003: 'NIYAM2026003',
+      student003: 'NIYAM2026003',
+      NIYAM2026_003: 'NIYAM2026003',
+      NIYAM2026003: 'NIYAM2026003',
+
       student_004: 'NIYAM2026004',
+      student004: 'NIYAM2026004',
+      NIYAM2026_004: 'NIYAM2026004',
+      NIYAM2026004: 'NIYAM2026004',
+
       student_005: 'NIYAM2026005',
+      student005: 'NIYAM2026005',
+      NIYAM2026_005: 'NIYAM2026005',
+      NIYAM2026005: 'NIYAM2026005',
     };
 
-    if (mapping[studentIdOrEnrollment]) {
-      return mapping[studentIdOrEnrollment];
+    if (mapping[studentIdOrEnrollment] || mapping[directKey] || mapping[cleanKey]) {
+      return mapping[studentIdOrEnrollment] || mapping[directKey] || mapping[cleanKey];
     }
 
     // Fallback to primary student NIYAM2026001 if valid user found
