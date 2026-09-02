@@ -332,6 +332,44 @@ async function main() {
         });
     }
 
+    /*
+     * Exam Schedule for Semester 5 B.Tech CSE
+     */
+    const examSchedulesData = [
+        { courseCode: 'FMI301', subjectName: 'Fundamental Machine Intelligence', examDate: new Date('2026-11-15T00:00:00Z'), examTime: '10:00 AM - 01:00 PM', examCenter: 'Hall A, Main Block' },
+        { courseCode: 'IML302', subjectName: 'Introduction to Machine Learning', examDate: new Date('2026-11-17T00:00:00Z'), examTime: '10:00 AM - 01:00 PM', examCenter: 'Hall A, Main Block' },
+        { courseCode: 'CNW303', subjectName: 'Computer Networks', examDate: new Date('2026-11-19T00:00:00Z'), examTime: '10:00 AM - 01:00 PM', examCenter: 'Hall B, South Block' },
+        { courseCode: 'CPR304', subjectName: 'C Programming', examDate: new Date('2026-11-21T00:00:00Z'), examTime: '02:00 PM - 05:00 PM', examCenter: 'Lab Complex 1' },
+        { courseCode: 'OSY305', subjectName: 'Operating System', examDate: new Date('2026-11-24T00:00:00Z'), examTime: '10:00 AM - 01:00 PM', examCenter: 'Hall A, Main Block' },
+    ];
+
+    for (const schedule of examSchedulesData) {
+        const existingSchedule = await prisma.examSchedule.findFirst({
+            where: {
+                institutionId: institution.id,
+                program: 'B.Tech Computer Science and Engineering',
+                semester: 5,
+                courseCode: schedule.courseCode,
+            }
+        });
+
+        if (!existingSchedule) {
+            await prisma.examSchedule.create({
+                data: {
+                    institutionId: institution.id,
+                    program: 'B.Tech Computer Science and Engineering',
+                    semester: 5,
+                    ...schedule
+                }
+            });
+        } else {
+            await prisma.examSchedule.update({
+                where: { id: existingSchedule.id },
+                data: schedule
+            });
+        }
+    }
+
     console.log({
         institution,
         department,

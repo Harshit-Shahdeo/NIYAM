@@ -299,3 +299,52 @@ def test_erp_case_3_missing_semester():
     data = res.json()
     assert data["proposed_action"] is None
     assert data["uncertainty_detected"] is True
+
+# Document Case 1: Complete Admit Card request -> ALLOW
+def test_document_case_1_complete():
+    payload = {
+        "request_id": "doc-c1",
+        "message": "Generate my admit card for semester 5.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["intent"] == "DOCUMENT_GENERATION"
+    assert data["decision"] == "ALLOW"
+    assert data["proposed_action"] is not None
+    assert data["proposed_action"]["tool"] == "DOCUMENT"
+    assert data["proposed_action"]["operation"] == "GENERATE_ADMIT_CARD"
+    assert data["proposed_action"]["arguments"]["semester"] == 5
+    assert "enrollmentNumber" not in data["proposed_action"]["arguments"]
+    assert "userId" not in data["proposed_action"]["arguments"]
+    assert "studentId" not in data["proposed_action"]["arguments"]
+
+# Document Case 2: Missing semester -> clarification
+def test_document_case_2_missing_semester():
+    payload = {
+        "request_id": "doc-c2",
+        "message": "I need my admit card.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True
+
+# Document Case 3: Invalid semester -> clarification
+def test_document_case_3_invalid_semester():
+    payload = {
+        "request_id": "doc-c3",
+        "message": "I need my admit card for semester -1.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True

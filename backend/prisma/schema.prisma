@@ -84,6 +84,7 @@ model Institution {
   auditEvents     AuditEvent[]
   conversations   Conversation[]
   semesterResults SemesterResult[]
+  examSchedules   ExamSchedule[]
 }
 
 model Department {
@@ -371,3 +372,19 @@ model ResultSubject {
   @@index([semesterResultId])
 }
 
+model ExamSchedule {
+  id            String   @id @default(uuid())
+  institutionId String
+  program       String
+  semester      Int
+  
+  courseCode    String
+  subjectName   String
+  examDate      DateTime @db.Date
+  examTime      String
+  examCenter    String
+
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  
+  @@index([institutionId, program, semester])
+}

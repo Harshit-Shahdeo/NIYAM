@@ -12,12 +12,15 @@ import { StudentInfoTool } from './student/student-info.tool';
 
 import { ToolRegistry } from './tool-registry';
 import { ErpTool } from './erp/erp.tool';
+import { DocumentsModule } from '../documents/documents.module';
+import { DocumentTool } from './document/document.tool';
 
 @Module({
   imports: [
     DatabaseModule,
     DiscoveryModule,
     AuditModule,
+    DocumentsModule,
   ],
 
   providers: [
@@ -27,6 +30,7 @@ import { ErpTool } from './erp/erp.tool';
     MaintenanceTicketTool,
     StudentInfoTool,
     ErpTool,
+    DocumentTool,
   ],
 
   exports: [
@@ -35,6 +39,7 @@ import { ErpTool } from './erp/erp.tool';
     MaintenanceTicketTool,
     StudentInfoTool,
     ErpTool,
+    DocumentTool,
   ],
 })
 export class ToolsModule { }

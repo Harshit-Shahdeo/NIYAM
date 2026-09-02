@@ -57,6 +57,7 @@ class LLMService:
         "MAINTENANCE_REQUEST",
         "STUDENT_INFORMATION",
         "SEMESTER_RESULT",
+        "DOCUMENT_GENERATION",
         "GENERAL_QUERY",
         "UNKNOWN",
     }
@@ -93,6 +94,12 @@ class LLMService:
             "operation": "GET_SEMESTER_RESULT",
             "required": {
                 "enrollmentNumber",
+                "semester",
+            },
+        },
+        "DOCUMENT": {
+            "operation": "GENERATE_ADMIT_CARD",
+            "required": {
                 "semester",
             },
         },
@@ -705,10 +712,16 @@ Do not infer the semester from backend identity, user profile, or past conversat
 Do not invent the result data. The tool retrieves the result.
 The backend authorization layer enforces all access rules.
 
+DOCUMENT (Admit Card Generation):
+
+- semester (positive integer)
+
+Do not invent or supply student identity fields such as user ID, enrollment number, student ID, or institution ID for admit cards. The AI should extract the semester from the user's request. If missing or ambiguous, ask for clarification.
+
 If required information is missing or ambiguous:
 - uncertainty_detected = true
 - proposed_action = null
-- Provide an assistant_message asking for the specific missing information (e.g. "Please provide your enrollment number.").
+- Provide an assistant_message asking for the specific missing information (e.g. "Please provide your enrollment number." or "Which semester's admit card do you need?").
 
 Otherwise, when the request is complete:
 - decision = "ALLOW"
@@ -762,6 +775,16 @@ ERP:
   "operation": "GET_SEMESTER_RESULT",
   "arguments": {
     "enrollmentNumber": "string",
+    "semester": "integer"
+  }
+}
+
+DOCUMENT:
+
+{
+  "tool": "DOCUMENT",
+  "operation": "GENERATE_ADMIT_CARD",
+  "arguments": {
     "semester": "integer"
   }
 }
@@ -1566,6 +1589,19 @@ Do not include explanations outside JSON.
                     result=result,
                     reason="Semester must be a positive integer.",
                     assistant_message="Please provide a valid semester number.",
+                )
+
+        elif tool == "DOCUMENT":
+            try:
+                semester = int(arguments.get("semester"))
+                if semester <= 0:
+                    raise ValueError
+                arguments["semester"] = semester
+            except (TypeError, ValueError):
+                return self._force_clarification(
+                    result=result,
+                    reason="Semester must be a positive integer.",
+                    assistant_message="Please provide a valid semester number for the admit card.",
                 )
 
         action["arguments"] = arguments
