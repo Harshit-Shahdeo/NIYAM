@@ -30,6 +30,8 @@ export class DocumentTool extends InstitutionalTool {
         switch (operation) {
             case 'GENERATE_ADMIT_CARD':
                 return this.generateAdmitCard(arguments_, context);
+            case 'GENERATE_RESULT':
+                return this.generateResult(arguments_, context);
             default:
                 throw new BadRequestException(
                     `Unsupported DocumentTool operation: ${operation}`,
@@ -258,6 +260,210 @@ export class DocumentTool extends InstitutionalTool {
 
         return {
             message: `Admit card generated successfully.\n\n[Download Admit Card](/api/documents/download/${token})`,
+        };
+    }
+
+    private async generateResult(
+        arguments_: Record<string, unknown>,
+        context: ToolExecutionContext,
+    ) {
+        const { semester } = arguments_;
+
+        if (typeof semester !== 'number' || !Number.isInteger(semester) || semester <= 0) {
+            throw new BadRequestException('semester is required and must be a positive integer.');
+        }
+
+        if (context.role !== 'STUDENT') {
+            throw new ForbiddenException('Only students can generate their own result document.');
+        }
+
+        const authStudentProfile = await this.prisma.studentProfile.findFirst({
+            where: {
+                userId: context.userId,
+                institutionId: context.institutionId,
+            },
+            include: {
+                institution: true,
+                user: true,
+            },
+        });
+
+        if (!authStudentProfile) {
+            throw new NotFoundException('Authenticated student profile not found.');
+        }
+
+        const semesterResult = await this.prisma.semesterResult.findFirst({
+            where: {
+                studentProfileId: authStudentProfile.id,
+                semester: semester,
+                institutionId: context.institutionId,
+            },
+            include: {
+                subjects: {
+                    orderBy: { courseCode: 'asc' },
+                },
+            },
+        });
+
+        if (!semesterResult) {
+            throw new NotFoundException(`No result found for Semester ${semester}.`);
+        }
+
+        const pdfDoc = await PDFDocument.create();
+        const page = pdfDoc.addPage([595.28, 841.89]); // A4 size
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        
+        let y = 800;
+        const pageWidth = 595.28;
+        const margin = 40;
+
+        // Header Background
+        page.drawRectangle({
+            x: margin,
+            y: y - 50,
+            width: pageWidth - margin * 2,
+            height: 60,
+            color: rgb(0.15, 0.20, 0.35)
+        });
+
+        const title = "NIYAM MOCK UNIVERSITY";
+        const titleWidth = fontBold.widthOfTextAtSize(title, 20);
+        page.drawText(title, { x: (pageWidth - titleWidth) / 2, y: y - 15, size: 20, font: fontBold, color: rgb(1, 1, 1) });
+        
+        y -= 35;
+        const subtitle = "EXAMINATION / ACADEMIC RECORD";
+        const subtitleWidth = fontBold.widthOfTextAtSize(subtitle, 12);
+        page.drawText(subtitle, { x: (pageWidth - subtitleWidth) / 2, y, size: 12, font: fontBold, color: rgb(1, 1, 1) });
+        y -= 50;
+
+        const examTitle = `SEMESTER ${semester} RESULT`;
+        const examTitleWidth = fontBold.widthOfTextAtSize(examTitle, 12);
+        page.drawText(examTitle, { x: (pageWidth - examTitleWidth) / 2, y, size: 12, font: fontBold, color: rgb(0, 0, 0) });
+        y -= 30;
+
+        // Student Info
+        const infoX = margin;
+        const valX = margin + 120;
+        const lineSpacing = 20;
+
+        page.drawText("REGISTRATION NO", { x: infoX, y, size: 10, font: fontBold });
+        page.drawText(`: ${authStudentProfile.enrollmentNumber}`, { x: valX, y, size: 10, font });
+        y -= lineSpacing;
+
+        page.drawText("STUDENT NAME", { x: infoX, y, size: 10, font: fontBold });
+        page.drawText(`: ${authStudentProfile.user.name}`, { x: valX, y, size: 10, font });
+        y -= lineSpacing;
+
+        page.drawText("PROGRAM", { x: infoX, y, size: 10, font: fontBold });
+        const progStr = authStudentProfile.program || "Not Available";
+        page.drawText(`: ${progStr}`, { x: valX, y, size: 10, font });
+        y -= 50;
+
+        // Table
+        const colWidths = [80, 230, 60, 60, 85];
+        const colXs = [margin];
+        for (let i = 0; i < colWidths.length - 1; i++) {
+            colXs.push(colXs[i] + colWidths[i]);
+        }
+        const tableWidth = pageWidth - margin * 2;
+        const rowHeight = 25;
+
+        const headers = ["Course Code", "Subject Name", "Credits", "Marks", "Grade"];
+        
+        // Header Row
+        page.drawRectangle({
+            x: margin,
+            y: y - 5,
+            width: tableWidth,
+            height: rowHeight,
+            borderColor: rgb(0, 0, 0),
+            borderWidth: 1,
+        });
+        
+        for (let i = 0; i < headers.length; i++) {
+            page.drawText(headers[i], {
+                x: colXs[i] + 5,
+                y: y + 5,
+                size: 9,
+                font: fontBold,
+            });
+            if (i > 0) {
+                page.drawLine({
+                    start: { x: colXs[i], y: y - 5 },
+                    end: { x: colXs[i], y: y + rowHeight - 5 },
+                    color: rgb(0, 0, 0),
+                    thickness: 1,
+                });
+            }
+        }
+        y -= rowHeight;
+
+        let totalCredits = 0;
+
+        for (const subject of semesterResult.subjects) {
+            totalCredits += subject.credits;
+
+            page.drawRectangle({
+                x: margin,
+                y: y - 5,
+                width: tableWidth,
+                height: rowHeight,
+                borderColor: rgb(0, 0, 0),
+                borderWidth: 1,
+            });
+
+            // Course Code
+            page.drawText(subject.courseCode, { x: colXs[0] + 5, y: y + 5, size: 8, font });
+
+            // Subject Name
+            let subjectName = subject.courseName;
+            if (subjectName.length > 45) subjectName = subjectName.substring(0, 42) + '...';
+            page.drawText(subjectName, { x: colXs[1] + 5, y: y + 5, size: 8, font });
+
+            // Credits
+            page.drawText(String(subject.credits), { x: colXs[2] + 5, y: y + 5, size: 8, font });
+
+            // Marks
+            page.drawText(String(subject.marks), { x: colXs[3] + 5, y: y + 5, size: 8, font });
+
+            // Grade
+            page.drawText(subject.grade, { x: colXs[4] + 5, y: y + 5, size: 8, font });
+
+            // Draw column lines
+            for (let i = 1; i < colXs.length; i++) {
+                page.drawLine({
+                    start: { x: colXs[i], y: y - 5 },
+                    end: { x: colXs[i], y: y + rowHeight - 5 },
+                    color: rgb(0, 0, 0),
+                    thickness: 1,
+                });
+            }
+            
+            y -= rowHeight;
+        }
+
+        y -= 30;
+
+        const sgpaStr = semesterResult.sgpa !== null ? Number(semesterResult.sgpa).toFixed(2) : "Not Available";
+        page.drawText(`Total Credits: ${totalCredits}`, { x: margin, y, size: 10, font: fontBold });
+        page.drawText(`SGPA: ${sgpaStr}`, { x: margin + 150, y, size: 10, font: fontBold });
+
+        const pdfBytes = await pdfDoc.save();
+        const buffer = Buffer.from(pdfBytes);
+
+        const token = crypto.randomUUID();
+        this.documentsService.storeDocument({
+            token,
+            buffer,
+            userId: context.userId,
+            institutionId: context.institutionId,
+            documentType: 'RESULT',
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+        });
+
+        return {
+            message: `Result document generated successfully.\n\n[Download Result](/api/documents/download/${token})`,
         };
     }
 }

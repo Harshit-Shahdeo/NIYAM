@@ -98,7 +98,7 @@ class LLMService:
             },
         },
         "DOCUMENT": {
-            "operation": "GENERATE_ADMIT_CARD",
+            "operations": ["GENERATE_ADMIT_CARD", "GENERATE_RESULT"],
             "required": {
                 "semester",
             },
@@ -698,30 +698,32 @@ The backend authorization layer will determine whether the user has
 permission to book the resource.
 
 ============================================================
-SEMESTER RESULT
+============================================================
+SEMESTER RESULT & DOCUMENTS
 ============================================================
 
-Only create ERP tool when the CURRENT USER MESSAGE explicitly requests a semester result.
+1. SHOW/VIEW RESULT (ERP -> GET_SEMESTER_RESULT):
+Use this when the user explicitly asks to view, show, or check their result data.
+Required: enrollmentNumber, semester.
 
-Required:
-- enrollmentNumber (string)
-- semester (positive integer)
+2. DOWNLOAD/GENERATE RESULT (DOCUMENT -> GENERATE_RESULT):
+Use this when the user explicitly asks to download or generate a PDF of their result.
+Required: semester. Do NOT supply enrollmentNumber or identity fields.
 
-Do not invent missing values. If either enrollmentNumber or semester is missing or ambiguous, you must ask the user for it.
+3. DOWNLOAD/GENERATE ADMIT CARD (DOCUMENT -> GENERATE_ADMIT_CARD):
+Use this when the user explicitly asks to download or generate an admit card.
+Required: semester. Do NOT supply enrollmentNumber or identity fields.
+
+For all above:
+Do not invent missing values. If semester (or enrollmentNumber for ERP) is missing or ambiguous, you must ask the user for it.
 Do not infer the semester from backend identity, user profile, or past conversation.
-Do not invent the result data. The tool retrieves the result.
+The AI should extract the semester from the user's request.
 The backend authorization layer enforces all access rules.
-
-DOCUMENT (Admit Card Generation):
-
-- semester (positive integer)
-
-Do not invent or supply student identity fields such as user ID, enrollment number, student ID, or institution ID for admit cards. The AI should extract the semester from the user's request. If missing or ambiguous, ask for clarification.
 
 If required information is missing or ambiguous:
 - uncertainty_detected = true
 - proposed_action = null
-- Provide an assistant_message asking for the specific missing information (e.g. "Please provide your enrollment number." or "Which semester's admit card do you need?").
+- Provide an assistant_message asking for the specific missing information (e.g. "Which semester do you need?").
 
 Otherwise, when the request is complete:
 - decision = "ALLOW"
@@ -783,7 +785,7 @@ DOCUMENT:
 
 {
   "tool": "DOCUMENT",
-  "operation": "GENERATE_ADMIT_CARD",
+  "operation": "GENERATE_ADMIT_CARD" | "GENERATE_RESULT",
   "arguments": {
     "semester": "integer"
   }
@@ -1368,12 +1370,21 @@ Do not include explanations outside JSON.
                 ),
             )
 
-        expected_operation = (
+        expected_operations = (
             self.TOOL_SCHEMAS[tool]
-            ["operation"]
+            .get("operations")
         )
 
-        if operation != expected_operation:
+        if expected_operations:
+            is_valid = operation in expected_operations
+        else:
+            expected_operation = (
+                self.TOOL_SCHEMAS[tool]
+                .get("operation")
+            )
+            is_valid = operation == expected_operation
+
+        if not is_valid:
             return self._force_clarification(
                 result=result,
                 reason=(

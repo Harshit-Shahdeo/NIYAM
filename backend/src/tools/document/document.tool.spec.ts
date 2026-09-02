@@ -17,6 +17,9 @@ describe('DocumentTool', () => {
         examSchedule: {
             findMany: jest.fn(),
         },
+        semesterResult: {
+            findFirst: jest.fn(),
+        },
     };
 
     const mockDocumentsService = {
@@ -123,5 +126,72 @@ describe('DocumentTool', () => {
 
         expect(result.message).toContain('Admit card generated successfully');
         expect(result.message).toContain('[Download Admit Card](/api/documents/download/');
+    });
+
+    it('should reject invalid semester for GENERATE_RESULT', async () => {
+        await expect(tool.execute('GENERATE_RESULT', {}, mockContext)).rejects.toThrow(BadRequestException);
+        await expect(tool.execute('GENERATE_RESULT', { semester: '5' }, mockContext)).rejects.toThrow(BadRequestException);
+        await expect(tool.execute('GENERATE_RESULT', { semester: -1 }, mockContext)).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject if non-student attempts to generate GENERATE_RESULT', async () => {
+        const facultyContext: ToolExecutionContext = {
+            ...mockContext,
+            role: 'FACULTY',
+        };
+        await expect(tool.execute('GENERATE_RESULT', { semester: 5 }, facultyContext)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should reject if result is missing for GENERATE_RESULT', async () => {
+        mockPrisma.studentProfile.findFirst.mockResolvedValue({
+            id: 'prof-1',
+            program: 'B.Tech',
+            institution: { name: 'Demo Inst' },
+            user: { name: 'Student' }
+        });
+        mockPrisma.semesterResult.findFirst.mockResolvedValue(null);
+
+        await expect(tool.execute('GENERATE_RESULT', { semester: 5 }, mockContext)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should generate RESULT PDF and return download link for valid data', async () => {
+        mockPrisma.studentProfile.findFirst.mockResolvedValue({
+            id: 'prof-1',
+            program: 'B.Tech',
+            enrollmentNumber: 'ENR-123',
+            institution: { name: 'Demo Inst' },
+            user: { name: 'Student Name' }
+        });
+
+        mockPrisma.semesterResult.findFirst.mockResolvedValue({
+            semester: 5,
+            sgpa: '8.5',
+            subjects: [
+                { courseCode: 'CS101', courseName: 'Intro to CS', credits: 4, marks: 85, grade: 'A' }
+            ]
+        });
+
+        const result = await tool.execute('GENERATE_RESULT', { semester: 5 }, mockContext) as { message: string };
+
+        expect(mockPrisma.studentProfile.findFirst).toHaveBeenCalledWith({
+            where: { userId: 'user-1', institutionId: 'inst-1' },
+            include: { institution: true, user: true },
+        });
+
+        expect(mockPrisma.semesterResult.findFirst).toHaveBeenCalledWith({
+            where: { studentProfileId: 'prof-1', semester: 5, institutionId: 'inst-1' },
+            include: { subjects: { orderBy: { courseCode: 'asc' } } },
+        });
+
+        expect(documentsService.storeDocument).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userId: 'user-1',
+                institutionId: 'inst-1',
+                documentType: 'RESULT',
+            })
+        );
+
+        expect(result.message).toContain('Result document generated successfully');
+        expect(result.message).toContain('[Download Result](/api/documents/download/');
     });
 });

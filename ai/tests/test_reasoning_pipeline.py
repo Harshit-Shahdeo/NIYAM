@@ -348,3 +348,69 @@ def test_document_case_3_invalid_semester():
     data = res.json()
     assert data["proposed_action"] is None
     assert data["uncertainty_detected"] is True
+
+# Document Result Case 1: Complete Result Download request -> ALLOW
+def test_document_result_case_1_complete():
+    payload = {
+        "request_id": "doc-res-c1",
+        "message": "Download my semester 5 result.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    # It might map to DOCUMENT_GENERATION depending on how the LLM interprets it, but we assert the tool/action
+    assert data["decision"] == "ALLOW"
+    assert data["proposed_action"] is not None
+    assert data["proposed_action"]["tool"] == "DOCUMENT"
+    assert data["proposed_action"]["operation"] == "GENERATE_RESULT"
+    assert data["proposed_action"]["arguments"]["semester"] == 5
+    assert "enrollmentNumber" not in data["proposed_action"]["arguments"]
+    assert "userId" not in data["proposed_action"]["arguments"]
+
+# Document Result Case 2: Missing semester -> clarification
+def test_document_result_case_2_missing_semester():
+    payload = {
+        "request_id": "doc-res-c2",
+        "message": "I want to download my result.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True
+
+# Document Result Case 3: Invalid semester -> clarification
+def test_document_result_case_3_invalid_semester():
+    payload = {
+        "request_id": "doc-res-c3",
+        "message": "Download my semester -2 result.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["proposed_action"] is None
+    assert data["uncertainty_detected"] is True
+
+# Document Result Case 4: Show result -> ERP (differentiation check)
+def test_document_result_case_4_show_result():
+    payload = {
+        "request_id": "doc-res-c4",
+        "message": "Show me my semester 5 result. My enrollment is NIYAM2026001.",
+        "user": {"id": "student_01", "role": "STUDENT"},
+        "conversation": [],
+    }
+    res = client.post("/agent/reason", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["decision"] == "ALLOW"
+    assert data["proposed_action"] is not None
+    assert data["proposed_action"]["tool"] == "ERP"
+    assert data["proposed_action"]["operation"] == "GET_SEMESTER_RESULT"
+    assert data["proposed_action"]["arguments"]["semester"] == 5
+    assert data["proposed_action"]["arguments"]["enrollmentNumber"] == "NIYAM2026001"
