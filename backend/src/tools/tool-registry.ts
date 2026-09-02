@@ -1,8 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-
 import { DiscoveryService } from '@nestjs/core';
-
-import { InstitutionalTool } from './institutional-tools';
+import { InstitutionalTool, ToolMetadata } from './institutional-tools';
 import { ToolExecutionContext } from './tool-execution-context';
 
 @Injectable()
@@ -42,6 +40,24 @@ export class ToolRegistry implements OnModuleInit {
     }
 
     return tool;
+  }
+
+  getAllMetadata(): ToolMetadata[] {
+    const metadataList: ToolMetadata[] = [];
+
+    for (const tool of this.tools.values()) {
+      if (typeof tool.getMetadata === 'function') {
+        metadataList.push(tool.getMetadata());
+      } else {
+        metadataList.push({
+          name: tool.name,
+          description: `Institutional tool ${tool.name}`,
+          operations: [],
+        });
+      }
+    }
+
+    return metadataList;
   }
 
   async execute(

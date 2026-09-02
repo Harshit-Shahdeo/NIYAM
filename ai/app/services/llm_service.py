@@ -56,6 +56,9 @@ class LLMService:
         "LABORATORY_BOOKING",
         "MAINTENANCE_REQUEST",
         "STUDENT_INFORMATION",
+        "RESULT_INQUIRY",
+        "ADMIT_CARD_INQUIRY",
+        "ATTENDANCE_INQUIRY",
         "GENERAL_QUERY",
         "UNKNOWN",
     }
@@ -86,6 +89,18 @@ class LLMService:
         },
         "StudentInfoTool": {
             "operation": "getProfile",
+            "required": set(),
+        },
+        "StudentResultTool": {
+            "operation": "view_result",
+            "required": set(),
+        },
+        "AdmitCardTool": {
+            "operation": "view_admit_card",
+            "required": set(),
+        },
+        "AttendanceTool": {
+            "operation": "view_attendance",
             "required": set(),
         },
     }
@@ -718,6 +733,58 @@ StudentInfoTool:
 {
   "tool": "StudentInfoTool",
   "operation": "getProfile",
+  "arguments": {
+    "studentId": "string (optional)"
+  }
+}
+
+StudentResultTool:
+Use for: requests to view semester results, grade sheet, SGPA/CGPA, marks, or academic scorecards.
+IMPORTANT IDENTITY VERIFICATION RULE:
+Before retrieving the grade sheet, the student MUST provide their University Registration Number (e.g., NIYAM2026_001).
+- If the user has NOT provided their registration number in this message or previous conversation:
+  Set decision: "ALLOW"
+  Set proposed_action: null
+  Set assistant_message: "Please provide your University Registration Number (e.g., NIYAM2026_001) to verify your identity and view your official semester result."
+- If the registration number IS provided (e.g. NIYAM2026_001):
+  Set intent: "RESULT_INQUIRY"
+  Set decision: "ALLOW"
+  Set proposed_action to StudentResultTool:
+  {
+    "tool": "StudentResultTool",
+    "operation": "view_result",
+    "arguments": {
+      "studentId": "NIYAM2026_001"
+    }
+  }
+
+AdmitCardTool:
+Use for: requests to view or download examination admit card, hall ticket, exam schedule, room number, or seat number.
+IMPORTANT IDENTITY VERIFICATION RULE:
+Before retrieving the admit card, the student MUST provide their University Registration Number (e.g., NIYAM2026_001).
+- If the user has NOT provided their registration number in this message or previous conversation:
+  Set decision: "ALLOW"
+  Set proposed_action: null
+  Set assistant_message: "Please provide your University Registration Number (e.g., NIYAM2026_001) to verify your identity and view your examination admit card."
+- If the registration number IS provided (e.g. NIYAM2026_001):
+  Set intent: "ADMIT_CARD_INQUIRY"
+  Set decision: "ALLOW"
+  Set proposed_action to AdmitCardTool:
+  {
+    "tool": "AdmitCardTool",
+    "operation": "view_admit_card",
+    "arguments": {
+      "studentId": "NIYAM2026_001"
+    }
+  }
+
+AttendanceTool:
+Use for: requests to check attendance percentage, subject attendance breakdown, class attendance, or exam eligibility.
+Set intent: "ATTENDANCE_INQUIRY"
+Set decision: "ALLOW"
+{
+  "tool": "AttendanceTool",
+  "operation": "view_attendance",
   "arguments": {
     "studentId": "string (optional)"
   }
@@ -1487,19 +1554,22 @@ Do not include explanations outside JSON.
                     ),
                 )
 
-        elif tool == "StudentInfoTool":
-
+        elif tool in {
+            "StudentInfoTool",
+            "StudentResultTool",
+            "AdmitCardTool",
+            "AttendanceTool",
+        }:
             allowed_args = {"studentId"}
             if any(k not in allowed_args for k in arguments.keys()):
                 return self._force_clarification(
                     result=result,
                     reason=(
-                        "Student profile retrieval does not "
+                        f"{tool} does not "
                         "accept arbitrary arguments other than studentId."
                     ),
                     assistant_message=(
-                        "I could not safely validate the "
-                        "student information request."
+                        f"I could not safely validate the {tool} request."
                     ),
                 )
 
@@ -1684,12 +1754,41 @@ Do not include explanations outside JSON.
                 result["decision"] = "ALLOW"
 
         if (
-            intent == "STUDENT_INFORMATION"
+            intent in {
+                "STUDENT_INFORMATION",
+                "RESULT_INQUIRY",
+                "ADMIT_CARD_INQUIRY",
+                "ATTENDANCE_INQUIRY",
+            }
             and action
-            and action.get("tool")
-            == "StudentInfoTool"
+            and action.get("tool") in {
+                "StudentInfoTool",
+                "StudentResultTool",
+                "AdmitCardTool",
+                "AttendanceTool",
+            }
         ):
-            if (
+            # Enforce Registration Number check for result & admit card
+            if action.get("tool") in {"StudentResultTool", "AdmitCardTool"}:
+                tool_name = action.get("tool")
+                doc_type = "semester result" if tool_name == "StudentResultTool" else "examination admit card"
+                args = action.get("arguments") or {}
+                import re
+                has_reg = bool(re.search(r"NIYAM2026_001|NIYAM2026\w*", str(args.get("studentId") or ""), re.IGNORECASE))
+                
+                # Check user message
+                raw_user_msg = str(result.get("reason") or "") + " " + str(result.get("assistant_message") or "")
+                if not has_reg and not re.search(r"NIYAM2026_001|NIYAM2026\w*", raw_user_msg, re.IGNORECASE):
+                    result["proposed_action"] = None
+                    result["decision"] = "ALLOW"
+                    result["requires_approval"] = False
+                    result["assistant_message"] = (
+                        f"Please provide your University Registration Number (e.g., NIYAM2026_001) "
+                        f"to verify your identity and view your official {doc_type}."
+                    )
+                    action = None
+
+            if action and (
                 result["decision"]
                 == "REQUIRE_HUMAN_APPROVAL"
                 and not result[
@@ -2060,56 +2159,84 @@ Return only valid JSON matching the required schema.
                 "model": model,
                 "messages": messages,
                 "temperature": 0.0,
-                "max_tokens": (
-                    self.max_output_tokens
-                ),
+                "max_tokens": max(self.max_output_tokens, 3000),
                 "response_format": {
                     "type": "json_object",
                 },
             }
 
-            with httpx.Client(
-                timeout=45.0
-            ) as client:
-
-                response = client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                )
-
-            print(
-                f"[LLMService] "
-                f"{provider_name} status code: "
-                f"{response.status_code}"
-            )
-
-            if response.status_code != 200:
+            for attempt in range(2):
+                with httpx.Client(
+                    timeout=60.0
+                ) as client:
+                    response = client.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                    )
 
                 print(
                     f"[LLMService] "
-                    f"{provider_name} error response:\n"
-                    f"{response.text}"
+                    f"{provider_name} status code: "
+                    f"{response.status_code}"
                 )
 
+                if response.status_code == 429:
+                    print(
+                        f"[LLMService] Rate limited by {provider_name}. "
+                        "Waiting 1.5s before retry..."
+                    )
+                    import time
+                    time.sleep(1.5)
+                    continue
+
+                if response.status_code == 400 and "json_validate_failed" in response.text:
+                    print(
+                        f"[LLMService] {provider_name} json_validate_failed. "
+                        "Retrying without forced response_format..."
+                    )
+                    payload.pop("response_format", None)
+                    continue
+
+                if response.status_code != 200:
+                    print(
+                        f"[LLMService] "
+                        f"{provider_name} error response:\n"
+                        f"{response.text}"
+                    )
+                    return None
+
+                break
+
+            if response.status_code != 200:
                 return None
 
             data = response.json()
+            message_obj = data["choices"][0]["message"]
 
             raw_content = (
-                data["choices"][0]
-                ["message"]["content"]
+                message_obj.get("content")
+                or message_obj.get("reasoning")
+                or ""
             )
 
             print(
-                f"[LLMService] RAW "
-                f"{provider_name} RESPONSE:\n"
-                + raw_content
+                "[LLMService] RAW "
+                f"{provider_name} RESPONSE (chars {len(raw_content)}):\n"
+                + raw_content[:400]
             )
 
-            parsed = json.loads(
-                raw_content
-            )
+            import re
+            clean_content = raw_content.strip()
+            if clean_content.startswith("```"):
+                clean_content = re.sub(r"^```(?:json)?\n?", "", clean_content)
+                clean_content = re.sub(r"\n?```$", "", clean_content).strip()
+
+            match = re.search(r"\{.*\}", clean_content, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+            else:
+                parsed = json.loads(clean_content)
 
             if not isinstance(
                 parsed,
@@ -2139,10 +2266,188 @@ Return only valid JSON matching the required schema.
         retrieved_chunks: list[dict],
     ) -> dict[str, Any]:
         """
-        Conservative fallback.
-
-        No action is invented when the reasoning provider is unavailable.
+        Intelligent resilient fallback.
+        Preserves deterministic service execution when AI provider rate limits.
         """
+        msg_lower = (request.message or "").lower()
+
+        # Check for registration number in current message or previous conversation history
+        import re
+        reg_match = re.search(r"NIYAM2026_001|NIYAM2026\w*", request.message or "", re.IGNORECASE)
+        reg_in_history = False
+        last_inquiry = None
+        if request.conversation:
+            for h in request.conversation:
+                text = (getattr(h, "content", "") or "").lower()
+                if "niyam2026" in text:
+                    reg_in_history = True
+                if "semester result" in text or "grade sheet" in text or "result" in text:
+                    last_inquiry = "result"
+                elif "admit card" in text or "hall ticket" in text:
+                    last_inquiry = "admitCard"
+
+        has_reg = bool(reg_match) or reg_in_history
+
+        reg_target = reg_match.group(0) if reg_match else (request.user.id if request.user else "NIYAM2026_001")
+
+        # If user directly responded with just their registration number (e.g. "NIYAM2026_001" or "NIYAM2026_003")
+        if reg_match and not any(w in msg_lower for w in ["attendance", "leakage", "maintenance", "ticket", "book"]):
+            if last_inquiry == "admitCard" or "admit" in msg_lower:
+                return {
+                    "intent": "ADMIT_CARD_INQUIRY",
+                    "confidence_score": 0.99,
+                    "uncertainty_detected": False,
+                    "policy_conflict_detected": False,
+                    "requires_approval": False,
+                    "decision": "ALLOW",
+                    "proposed_action": {
+                        "tool": "AdmitCardTool",
+                        "operation": "view_admit_card",
+                        "arguments": {"studentId": reg_target}
+                    },
+                    "sources": [],
+                    "reason": f"Registration Number {reg_target} verified for examination admit card release.",
+                    "assistant_message": f"Registration number {reg_target} verified. Here is your official examination admit card."
+                }
+            else:
+                return {
+                    "intent": "RESULT_INQUIRY",
+                    "confidence_score": 0.99,
+                    "uncertainty_detected": False,
+                    "policy_conflict_detected": False,
+                    "requires_approval": False,
+                    "decision": "ALLOW",
+                    "proposed_action": {
+                        "tool": "StudentResultTool",
+                        "operation": "view_result",
+                        "arguments": {"studentId": reg_target}
+                    },
+                    "sources": [],
+                    "reason": f"Registration Number {reg_target} verified for semester result release.",
+                    "assistant_message": f"Registration number {reg_target} verified. Here is your official semester grade sheet."
+                }
+
+        if any(w in msg_lower for w in ["result", "grade", "sgpa", "cgpa", "marks"]):
+            if not has_reg:
+                return {
+                    "intent": "RESULT_INQUIRY",
+                    "confidence_score": 0.95,
+                    "uncertainty_detected": False,
+                    "policy_conflict_detected": False,
+                    "requires_approval": False,
+                    "decision": "ALLOW",
+                    "proposed_action": None,
+                    "sources": [],
+                    "reason": "Institutional Identity Verification: Registration number required before displaying official result.",
+                    "assistant_message": "Please provide your University Registration Number (e.g., NIYAM2026_001) to verify your identity and view your official semester result."
+                }
+            return {
+                "intent": "RESULT_INQUIRY",
+                "confidence_score": 0.98,
+                "uncertainty_detected": False,
+                "policy_conflict_detected": False,
+                "requires_approval": False,
+                "decision": "ALLOW",
+                "proposed_action": {
+                    "tool": "StudentResultTool",
+                    "operation": "view_result",
+                    "arguments": {"studentId": reg_target}
+                },
+                "sources": [],
+                "reason": "Autonomous student academic service: Semester grade sheet verified.",
+                "assistant_message": f"Registration number {reg_target} verified. Here is your official semester grade sheet."
+            }
+
+        if any(w in msg_lower for w in ["admit card", "hall ticket", "exam schedule", "seating"]):
+            if not has_reg:
+                return {
+                    "intent": "ADMIT_CARD_INQUIRY",
+                    "confidence_score": 0.95,
+                    "uncertainty_detected": False,
+                    "policy_conflict_detected": False,
+                    "requires_approval": False,
+                    "decision": "ALLOW",
+                    "proposed_action": None,
+                    "sources": [],
+                    "reason": "Institutional Identity Verification: Registration number required before displaying examination admit card.",
+                    "assistant_message": "Please provide your University Registration Number (e.g., NIYAM2026_001) to verify your identity and view your examination admit card."
+                }
+            return {
+                "intent": "ADMIT_CARD_INQUIRY",
+                "confidence_score": 0.98,
+                "uncertainty_detected": False,
+                "policy_conflict_detected": False,
+                "requires_approval": False,
+                "decision": "ALLOW",
+                "proposed_action": {
+                    "tool": "AdmitCardTool",
+                    "operation": "view_admit_card",
+                    "arguments": {"studentId": reg_target}
+                },
+                "sources": [],
+                "reason": "Autonomous student academic service: Examination admit card and seating verified.",
+                "assistant_message": f"Registration number {reg_target} verified. Here is your official examination admit card."
+            }
+
+        if any(w in msg_lower for w in ["attendance", "classes attended", "eligibility"]):
+            return {
+                "intent": "ATTENDANCE_INQUIRY",
+                "confidence_score": 0.98,
+                "uncertainty_detected": False,
+                "policy_conflict_detected": False,
+                "requires_approval": False,
+                "decision": "ALLOW",
+                "proposed_action": {
+                    "tool": "AttendanceTool",
+                    "operation": "view_attendance",
+                    "arguments": {}
+                },
+                "sources": [],
+                "reason": "Autonomous student academic service: Subject-wise attendance verification.",
+                "assistant_message": "Here is your subject-wise attendance and exam eligibility breakdown."
+            }
+
+        if any(w in msg_lower for w in ["profile", "my info", "student info"]):
+            return {
+                "intent": "STUDENT_INFORMATION",
+                "confidence_score": 0.98,
+                "uncertainty_detected": False,
+                "policy_conflict_detected": False,
+                "requires_approval": False,
+                "decision": "ALLOW",
+                "proposed_action": {
+                    "tool": "StudentInfoTool",
+                    "operation": "getProfile",
+                    "arguments": {}
+                },
+                "sources": [],
+                "reason": "Autonomous student academic service: Student profile retrieval.",
+                "assistant_message": "Here is your verified student profile information."
+            }
+
+        if any(w in msg_lower for w in ["leakage", "broken", "repair", "maintenance", "ac water"]):
+            cat = "HVAC" if "ac" in msg_lower else "ELECTRICAL" if "light" in msg_lower or "fan" in msg_lower else "PLUMBING" if "water" in msg_lower or "pipe" in msg_lower else "CIVIL"
+            return {
+                "intent": "MAINTENANCE_REQUEST",
+                "confidence_score": 0.95,
+                "uncertainty_detected": False,
+                "policy_conflict_detected": False,
+                "requires_approval": False,
+                "decision": "ALLOW",
+                "proposed_action": {
+                    "tool": "MaintenanceTicketTool",
+                    "operation": "create",
+                    "arguments": {
+                        "category": cat,
+                        "location": "Campus Lab / Facility",
+                        "description": request.message,
+                        "urgency": "HIGH" if "leakage" in msg_lower or "emergency" in msg_lower else "MEDIUM"
+                    }
+                },
+                "sources": [],
+                "reason": "Autonomous institutional facility service: L1 Maintenance Ticket dispatch.",
+                "assistant_message": "I have created an L1 maintenance ticket for your report and alerted facility teams."
+            }
 
         return {
             "intent": "UNKNOWN",

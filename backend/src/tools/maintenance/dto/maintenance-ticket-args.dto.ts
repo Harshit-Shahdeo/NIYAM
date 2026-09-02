@@ -31,8 +31,7 @@ export class MaintenanceTicketArgsDto {
 
   @IsOptional()
   @IsEnum(MaintenanceUrgency, {
-    message:
-      'urgency must be one of: LOW, MEDIUM, HIGH, EMERGENCY',
+    message: 'urgency must be one of: LOW, MEDIUM, HIGH, EMERGENCY',
   })
   urgency?: string;
 }

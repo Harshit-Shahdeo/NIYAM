@@ -93,7 +93,7 @@ async function main() {
             update: {
                 institutionId: institution.id,
                 departmentId: department.id,
-                enrollmentNumber: 'NIYAM2026001',
+                enrollmentNumber: 'NIYAM2026_001',
                 program: 'B.Tech Computer Science and Engineering',
                 semester: 5,
                 cgpa: 8.2,
@@ -103,7 +103,7 @@ async function main() {
                 institutionId: institution.id,
                 userId: student.id,
                 departmentId: department.id,
-                enrollmentNumber: 'NIYAM2026001',
+                enrollmentNumber: 'NIYAM2026_001',
                 program: 'B.Tech Computer Science and Engineering',
                 semester: 5,
                 cgpa: 8.2,

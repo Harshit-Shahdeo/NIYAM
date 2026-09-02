@@ -1,5 +1,6 @@
 # Node.js
 node_modules/
+.DS_Store
 
 # Environment variables
 .env
@@ -31,7 +32,7 @@ backend/dist/
 *.tsbuildinfo
 
 # OS files
-.DS_Store
-
 __pycache__/
 *.pyc
+frontend/
+generate_judges_guide.py

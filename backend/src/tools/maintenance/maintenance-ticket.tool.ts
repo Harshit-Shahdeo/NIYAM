@@ -26,8 +26,7 @@ export class MaintenanceTicketTool extends InstitutionalTool {
       arguments_,
     );
 
-    const ticketId =
-      `TICK-${randomUUID().split('-')[0].toUpperCase()}`;
+    const ticketId = `TICK-${randomUUID().split('-')[0].toUpperCase()}`;
 
     const urgency = args.urgency || 'MEDIUM';
 
@@ -48,8 +47,7 @@ export class MaintenanceTicketTool extends InstitutionalTool {
       description: args.description,
       urgency,
       slaHours,
-      assignedTeam:
-        `${args.category} Facilities Support Team`,
+      assignedTeam: `${args.category} Facilities Support Team`,
       requestId: context.requestId,
       createdAt: new Date().toISOString(),
     };
